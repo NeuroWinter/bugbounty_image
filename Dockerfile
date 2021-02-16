@@ -3,6 +3,7 @@ LABEL Description="This is a docker container that contains all the tools I use 
 
 # First lets create the dir for our tools
 RUN mkdir ~/tools
+RUN mkdir ~/targets
 RUN apt update && apt upgrade -y
 RUN apt install git python3 python3-pip wget curl libgnutls28-dev libcurl4-gnutls-dev libssl-dev jq vim libpcap0.8 iputils-ping wireguard nmap -y
 
