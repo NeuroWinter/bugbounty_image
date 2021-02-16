@@ -3,8 +3,10 @@ LABEL Description="This is a docker container that contains all the tools I use 
 
 # First lets create the dir for our tools
 RUN mkdir ~/tools
+RUN mkdir ~/targets
 RUN apt update && apt upgrade -y
-RUN apt install git python3 python3-pip wget curl libgnutls28-dev libcurl4-gnutls-dev libssl-dev jq vim libpcap0.8 iputils-ping wireguard -y
+RUN apt install git python3 python3-pip wget curl libgnutls28-dev libcurl4-gnutls-dev libssl-dev jq vim libpcap0.8 iputils-ping wireguard nmap -y
+
 
 WORKDIR /root/tools/
 
@@ -53,5 +55,23 @@ RUN git clone https://github.com/maurosoria/dirsearch.git
 # Install Ajurn
 RUN git clone https://github.com/s0md3v/Arjun.git && cd Arjun && \
     python3 setup.py install
+
+# Install Fuff
+RUN go get -u github.com/ffuf/ffuf
+
+# Install cloud-enum
+RUN git clone https://github.com/initstring/cloud_enum.git && \
+    cd cloud_enum && pip3 install -r requirements.txt
+
+# Install subfinder 
+RUN GO111MODULE=on go get -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder
+
+# Install RustScan
+RUN mkdir rustscan && cd rustscan && \
+    wget https://github.com/RustScan/RustScan/releases/download/2.0.1/rustscan_2.0.1_amd64.deb && \
+    dpkg -i rustscan_2.0.1_amd64.deb 
+
+# Install httpx
+RUN GO111MODULE=on go get -v github.com/projectdiscovery/httpx/cmd/httpx
 
 COPY .bash_aliases ../
