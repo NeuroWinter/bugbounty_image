@@ -35,3 +35,23 @@ the outputs there, using the following command:
 docker run -v /home/neuro/bugbounty/targets:/root/targets -it bbc bash
 ```
 For tips on how to use the tools check the links for each of the tools above.
+
+### VPN
+WireGuard is also installed, I use this to connect to different mullvad VPN
+servers. VPNs allow me to access different countries to test if different
+endpoints, or domains are accessible from within certain countries. I have a 
+folder with all my wireguard configs in it, so when starting the container I 
+add `-v /path/to/wireguard/configs:/root/wireguard/ ` We also need to include 
+some other access rights to the container so add the following to your start up
+command: 
+` --cap-add NET_ADMIN --cap-add SYS_MODULE --sysctl net.ipv4.conf.all.src_valid_mark=1 --sysctl net.ipv6.conf.all.disable_ipv6=0 `. Then to use the vpn I run `wg-quick up /root/wireguard/config_file`.
+So my final command to run the container is as follows:
+```
+docker run -v /home/neuro/targets:/root/targets \
+           -v /path/to/wireguard/configs:/root/wireguard/ \
+            --cap-add NET_ADMIN \
+            --cap-add SYS_MODULE \
+            --sysctl net.ipv4.conf.all.src_valid_mark=1
+            --sysctl net.ipv6.conf.all.disable_ipv6=0
+            -it bbc bash
+```
