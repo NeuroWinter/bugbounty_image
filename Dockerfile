@@ -7,6 +7,7 @@ RUN mkdir ~/targets
 RUN apt update && apt upgrade -y
 RUN apt install git python3 python3-pip wget curl libgnutls28-dev libcurl4-gnutls-dev libssl-dev jq vim libpcap0.8 iputils-ping wireguard nmap -y
 
+
 WORKDIR /root/tools/
 
 # Install Photon
@@ -72,6 +73,5 @@ RUN mkdir rustscan && cd rustscan && \
 
 # Install httpx
 RUN GO111MODULE=on go get -v github.com/projectdiscovery/httpx/cmd/httpx
-
 
 COPY .bash_aliases ../
