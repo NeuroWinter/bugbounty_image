@@ -1,4 +1,4 @@
-FROM docker.io/ubuntu:20.04
+FROM docker.io/ubuntu:20.10
 LABEL Description="This is a docker container that contains all the tools I use for bug hunting"
 
 # First lets create the dir for our tools
@@ -73,5 +73,11 @@ RUN mkdir rustscan && cd rustscan && \
 
 # Install httpx
 RUN GO111MODULE=on go get -v github.com/projectdiscovery/httpx/cmd/httpx
+
+# Install GF (https://github.com/tomnomnom/gf) and GF-patterns (https://github.com/1ndianl33t/Gf-Patterns)
+RUN go get -u github.com/tomnomnom/gf
+RUN git clone https://github.com/1ndianl33t/Gf-Patterns && \
+    mkdir ~/.gf && \
+    mv ~/tools/Gf-Patterns/*.json ~/.gf
 
 COPY .bash_aliases ../
