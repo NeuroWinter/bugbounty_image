@@ -46,17 +46,17 @@ cat $1 | while  read line; do arjurn $line; done
 }
 
 arjurn(){
-python ~/tools/Arjun/arjun.py -u https://$1/
+python3 ~/tools/Arjun/arjun.py -u https://$1/
 }
 
 #------ Tools ------
 dirsearch(){
-python3 ~/tools/dirsearch/dirsearch.py -r -R 4 -t 10 -F -e "php,asp,aspx,php,php3,php4,php5,txt,shtm,shtml,phtm,phtml,jhtml,pl,jsp,cfm,cfml,py,rb,cfg,zip,pdf,gz,tar,tar.gz,tgz,doc,docx,xls,xlsx,conf,log" -w ~/tools/dirsearch/db/dicc.txt -u $1 -b -x 301,302,404,500
+python3 ~/tools/dirsearch/dirsearch.py -r -R 4 -t 10 -F -e "php,asp,aspx,php,php3,php4,php5,txt,shtm,shtml,phtm,phtml,jhtml,pl,jsp,cfm,cfml,py,rb,cfg,zip,pdf,gz,tar,tar.gz,tgz,doc,docx,xls,xlsx,conf,log" -w ~/tools/dirsearch/db/dicc.txt -u $1 -b -x 301,302,404,500 --recursion-status 200-399,401 -o $1_dir.json --format json
 }
 
 sqlmap(){
 cd /tools/sqlmap*
-python sqlmap.py -u $1 
+python3 sqlmap.py -u $1
 }
 
 knock(){
@@ -65,7 +65,7 @@ python knockpy.py -w list.txt $1
 }
 
 am(){
-amass enum --passive -r 1.1.1.1 -d $1 -json $1.json
+amass enum --ip --active -r 1.1.1.1 -d $1 -json $1.json
 jq .name $1.json | sed "s/\"//g" | httprobe -c 60 | tee -a $1-domains-am.txt
 }
 
@@ -106,4 +106,8 @@ wfuzz -w ~/tools/SecLists/Discovery/Web-Content/raft-small-directories.txt -w ..
 
 ncx(){
 nc -l -n -vv -p $1 -k
+}
+
+wpsa(){
+    wpscan --random-user-agent -e ap,at,tt,cb,dbe,u,m --url $1 -o ~/targets/wps/$(echo $1 | sed -e 's#^https://##; s#/$##')
 }
