@@ -17,12 +17,13 @@ RUN cd Photon && pip3 install -r requirements.txt
 # Install Amass
 # first we need to install go
 RUN mkdir ~/apps/ && cd ~/apps/ && \
-    wget https://go.dev/dl/go1.19.2.linux-amd64.tar.gz && \
-    tar -C /usr/local -xzf go1.19.2.linux-amd64.tar.gz
+    wget https://go.dev/dl/go1.22.1.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf go1.22.1.linux-amd64.tar.gz
 ENV PATH=$PATH:/usr/local/go/bin
 
 ENV GO111MODULE=on
-RUN go install -v github.com/OWASP/Amass/v3/...@master
+ENV GOPATH=/root/go
+RUN go install -v github.com/owasp-amass/amass/v4/...@master
 ENV PATH=$PATH:~/go/bin
 
 # We also need to install httprobe!
