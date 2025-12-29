@@ -1,0 +1,41 @@
+#!/bin/bash
+# Usage: recon-pipeline domain.com
+
+if [ -z "$1" ]; then
+    echo "Usage: recon-pipeline <domain>"
+    exit 1
+fi
+
+DOMAIN=$1
+OUT=~/recon/$DOMAIN
+mkdir -p $OUT
+
+echo " Subdomain enumeration..."
+subfinder -d $DOMAIN -silent | anew $OUT/subs.txt
+amass enum -passive -d $DOMAIN 2>/dev/null | grep -E "^[a-zA-Z0-9.-]+\.$DOMAIN$" | anew $OUT/subs.txt
+
+echo " Probing live hosts..."
+cat $OUT/subs.txt | sort -u | httpx -silent | anew $OUT/live.txt
+
+echo " Crawling..."
+cat $OUT/live.txt | katana -d 3 -silent | anew $OUT/urls.txt
+
+echo " Fetching historical URLs..."
+cat $OUT/live.txt | waybackurls 2>/dev/null | anew $OUT/urls.txt
+cat $OUT/live.txt | gau --blacklist png,jpg,gif,css,woff 2>/dev/null | anew $OUT/urls.txt
+
+echo " Extracting JS files..."
+cat $OUT/urls.txt | grep -iE '\.js(\?|$)' | anew $OUT/js.txt
+
+echo " Extracting parameters..."
+cat $OUT/urls.txt | grep "=" | unfurl keys 2>/dev/null | sort -u | anew $OUT/params.txt
+
+echo " Running Nuclei..."
+nuclei -l $OUT/live.txt -severity critical,high,medium -o $OUT/nuclei.txt 2>/dev/null
+
+echo " Done! Results in $OUT/"
+echo " Summary:"
+echo "    Subdomains: $(wc -l < $OUT/subs.txt 2>/dev/null || echo 0)"
+echo "    Live hosts: $(wc -l < $OUT/live.txt 2>/dev/null || echo 0)"
+echo "    URLs found: $(wc -l < $OUT/urls.txt 2>/dev/null || echo 0)"
+echo "    JS files:   $(wc -l < $OUT/js.txt 2>/dev/null || echo 0)"
