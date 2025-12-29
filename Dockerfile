@@ -1,106 +1,201 @@
-FROM docker.io/ubuntu:20.04
-LABEL Description="This is a docker container that contains all the tools I use for bug hunting"
+FROM docker.io/ubuntu:22.04
+LABEL Description="Bug Bounty Toolkit 2025"
 
-# First lets create the dir for our tools
-RUN mkdir ~/tools
-RUN mkdir ~/targets
-RUN apt update && apt upgrade -y
-RUN apt install git python3 python3-pip wget curl libgnutls28-dev libcurl4-gnutls-dev libssl-dev jq vim libpcap0.8 iputils-ping wireguard nmap iproute2 openresolv iptables iproute2 wireguard-tools nftables -y
+ENV DEBIAN_FRONTEND=noninteractive \
+    GOPATH=/root/go \
+    GO111MODULE=on
 
+ENV PATH=/root/go/bin:/usr/local/go/bin:/root/.cargo/bin:/root/.local/bin:$PATH
+
+RUN apt-get update && apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends \
+        # Core utilities
+        git python3 python3-pip python3-venv wget curl ca-certificates gnupg \
+        # Build tools
+        make gcc g++ libffi-dev \
+        # Libraries
+        libgnutls28-dev libcurl4-gnutls-dev libssl-dev libpcap-dev \
+        # Network tools
+        jq vim dnsutils iputils-ping nmap iproute2 netcat-openbsd \
+        # VPN/Network
+        wireguard wireguard-tools openresolv iptables nftables \
+        # Ruby for wpscan
+        ruby-full \
+        # Chromium for headless tools
+        chromium-browser \
+    && \
+    # Install Node.js 20
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    # Cleanup
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# INSTALL GO 1.22
+RUN wget -q https://go.dev/dl/go1.22.1.linux-amd64.tar.gz -O /tmp/go.tar.gz && \
+    tar -C /usr/local -xzf /tmp/go.tar.gz && \
+    rm /tmp/go.tar.gz
+
+# INSTALL RUST
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+# GO TOOLS ProjectDiscovery Suite
+RUN echo "[+] Installing ProjectDiscovery tools..." && \
+    go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest && \
+    go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest && \
+    go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest && \
+    go install -v github.com/projectdiscovery/katana/cmd/katana@latest && \
+    go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest && \
+    go install -v github.com/projectdiscovery/cvemap/cmd/cvemap@latest && \
+    go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest && \
+    go install -v github.com/projectdiscovery/uncover/cmd/uncover@latest
+
+# GO TOOLS - Subdomain & Asset Discovery
+RUN echo "[+] Installing subdomain tools..." && \
+    go install -v github.com/owasp-amass/amass/v4/...@master && \
+    go install -v github.com/tomnomnom/assetfinder@latest
+
+# GO TOOLS URL & Endpoint Discovery
+RUN echo "[+] Installing URL discovery tools..." && \
+    go install -v github.com/tomnomnom/waybackurls@latest && \
+    go install -v github.com/lc/gau/v2/cmd/gau@latest && \
+    go install -v github.com/jaeles-project/gospider@latest && \
+    go install -v github.com/hakluke/hakrawler@latest
+
+# GO TOOLS- Fuzzing
+RUN echo "[+] Installing fuzzing tools..." && \
+    go install -v github.com/ffuf/ffuf/v2@latest && \
+    go install -v github.com/OJ/gobuster/v3@latest && \
+    go install -v github.com/tomnomnom/httprobe@latest
+
+# GO TOOLS Vulnerability Scanning
+RUN echo "[+] Installing vuln scanners..." && \
+    go install -v github.com/hahwul/dalfox/v2@latest && \
+    go install -v github.com/tomnomnom/gf@latest && \
+    go install -v github.com/m4dm0e/dirdar@latest && \
+    go install -v github.com/Hackmanit/Web-Cache-Vulnerability-Scanner@latest && \
+    go install -v github.com/mlcsec/headi@latest
+
+# GO TOOLS tomnomnom kit
+RUN echo "[+] Installing utility tools..." && \
+    go install -v github.com/tomnomnom/anew@latest && \
+    go install -v github.com/tomnomnom/qsreplace@latest && \
+    go install -v github.com/tomnomnom/unfurl@latest && \
+    go install -v github.com/tomnomnom/hacks/html-tool@latest
+
+# GO TOOLS -JS Analysis
+RUN echo "[+] Installing JS analysis tools..." && \
+    go install -v github.com/lc/subjs@latest
+
+# Clean Go cache after all Go installs
+RUN go clean -cache -modcache
+
+# RUST TOOLS
+RUN echo "[+] Installing Rust tools..." && \
+    cargo install feroxbuster && \
+    rm -rf /root/.cargo/registry /root/.cargo/git
+
+# PYTHON TOOLS
+RUN echo "[+] Installing Python tools..." && \
+    pip3 install --no-cache-dir \
+        wfuzz \
+        uro \
+        pyyaml \
+        requests \
+        beautifulsoup4
 
 WORKDIR /root/tools/
 
-# Install Photon
-RUN git clone https://github.com/s0md3v/Photon.git 
-RUN cd Photon && pip3 install -r requirements.txt
+# PYTHON TOOLS from repos
+RUN echo "[+] Cloning Python tools..." && \
+    # SQLMap
+    git clone --depth 1 https://github.com/sqlmapproject/sqlmap.git && \
+    # Ghauri - SQLi tool
+    git clone --depth 1 https://github.com/r0oth3x49/ghauri.git && \
+    cd ghauri && pip3 install --no-cache-dir . && cd .. && \
+    # jwt_tool
+    git clone --depth 1 https://github.com/ticarpi/jwt_tool.git && \
+    cd jwt_tool && pip3 install --no-cache-dir -r requirements.txt && \
+    chmod +x jwt_tool.py && ln -s /root/tools/jwt_tool/jwt_tool.py /usr/local/bin/jwt_tool && cd .. && \
+    # Arjun - Parameter discovery
+    git clone --depth 1 https://github.com/s0md3v/Arjun.git && \
+    cd Arjun && pip3 install --no-cache-dir . && cd .. && \
+    # ParamSpider
+    git clone --depth 1 https://github.com/devanshbatham/ParamSpider.git && \
+    cd ParamSpider && pip3 install --no-cache-dir . && cd .. && \
+    # LinkFinder - JS endpoint discovery
+    git clone --depth 1 https://github.com/GerbenJavado/LinkFinder.git && \
+    cd LinkFinder && pip3 install --no-cache-dir -r requirements.txt && \
+    python3 setup.py install && cd .. && \
+    # SecretFinder - Secrets in JS
+    git clone --depth 1 https://github.com/m4ll0k/SecretFinder.git && \
+    cd SecretFinder && pip3 install --no-cache-dir -r requirements.txt && cd .. && \
+    # Photon - Crawler
+    git clone --depth 1 https://github.com/s0md3v/Photon.git && \
+    pip3 install --no-cache-dir -r Photon/requirements.txt && \
+    # dirsearch
+    git clone --depth 1 https://github.com/maurosoria/dirsearch.git && \
+    pip3 install --no-cache-dir -r dirsearch/requirements.txt && \
+    # cloud_enum
+    git clone --depth 1 https://github.com/initstring/cloud_enum.git && \
+    pip3 install --no-cache-dir -r cloud_enum/requirements.txt && \
+    # waymore - Enhanced wayback tool
+    pip3 install --no-cache-dir waymore && \
+    # Clean up .git dirs
+    find . -name ".git" -type d -exec rm -rf {} + 2>/dev/null || true
 
-# Install Amass
-# first we need to install go
-RUN mkdir ~/apps/ && cd ~/apps/ && \
-    wget https://go.dev/dl/go1.22.1.linux-amd64.tar.gz && \
-    tar -C /usr/local -xzf go1.22.1.linux-amd64.tar.gz
-ENV PATH=$PATH:/usr/local/go/bin
+# COMPILED TOOLS
+RUN echo "[+] Building compiled tools..." && \
+    # MassScan
+    git clone --depth 1 https://github.com/robertdavidgraham/masscan && \
+    cd masscan && make -j$(nproc) && make install && cd .. && rm -rf masscan && \
+    # Hydra
+    git clone --depth 1 https://github.com/vanhauser-thc/thc-hydra.git && \
+    cd thc-hydra && ./configure && make -j$(nproc) && make install && cd .. && rm -rf thc-hydra
 
-ENV GO111MODULE=on
-ENV GOPATH=/root/go
-RUN go install -v github.com/owasp-amass/amass/v4/...@master
-ENV PATH=$PATH:~/go/bin
+# NPM TOOLS
+RUN echo "[+] Installing npm tools..." && \
+    npm -g install js-beautify && \
+    npm cache clean --force
 
-# We also need to install httprobe!
-RUN  go install github.com/tomnomnom/httprobe@latest
+# RUBY TOOLS
+RUN echo "[+] Installing Ruby tools..." && \
+    gem install wpscan --no-document
 
+# GF PATTERNS
+RUN echo "[+] Setting up GF patterns..." && \
+    git clone --depth 1 https://github.com/1ndianl33t/Gf-Patterns && \
+    mkdir -p ~/.gf && \
+    mv Gf-Patterns/*.json ~/.gf/ && \
+    rm -rf Gf-Patterns
 
-# Install MassScan
-RUN apt-get --assume-yes install git make gcc && \
-    git clone https://github.com/robertdavidgraham/masscan && \
-    cd masscan && \
-    make install
+# NUCLEI TEMPLATES
+RUN echo "[+] Updating Nuclei templates..." && \
+    nuclei -update-templates
 
-# Time to get the wordlists!
-RUN git clone https://github.com/danielmiessler/SecLists.git
+# GAU CONFIG
+RUN mkdir -p /root && echo 'providers = ["wayback", "commoncrawl", "otx", "urlscan"]' > /root/.gau.toml
 
-# Now lets install js-beautify
-# for this we need node and npm
-RUN curl -fsSL https://deb.nodesource.com/setup_14.x | bash -
-RUN apt-get install -y nodejs
-RUN npm -g install js-beautify
+# VERIFY GO TOOLS ARE FIRST IN PATH
+RUN echo "[+] Verifying tool paths..." && \
+    which httpx && \
+    httpx -version
 
-# Now lets install wfuzz!
-RUN pip3 install wfuzz
+# WORDLISTS
+RUN echo "[+] Downloading wordlists..." && \
+    wget -q https://github.com/danielmiessler/SecLists/archive/refs/tags/2024.1.tar.gz && \
+    tar -xf 2024.1.tar.gz && rm 2024.1.tar.gz && \
+    mv SecLists-2024.1 /usr/share/seclists
 
-# AND sqlmap!
-RUN git clone --depth 1 https://github.com/sqlmapproject/sqlmap.git sqlmap-dev
+# DIRECTORY STRUCTURE
+RUN mkdir -p ~/targets ~/recon ~/reports
 
-# Now dirsearch
-RUN git clone https://github.com/maurosoria/dirsearch.git && \
-    cd dirsearch && \
-    pip install -r requirements.txt
+# COPY SCRIPTS AND ALIASES
+COPY scripts/recon-pipeline /usr/local/bin/recon-pipeline
+COPY scripts/xss-hunt /usr/local/bin/xss-hunt
+RUN chmod +x /usr/local/bin/recon-pipeline /usr/local/bin/xss-hunt
 
-# Install Ajurn
-RUN git clone https://github.com/s0md3v/Arjun.git && cd Arjun && \
-    python3 setup.py install
+COPY bash_aliases /root/.bash_aliases
+RUN echo "source ~/.bash_aliases" >> ~/.bashrc
 
-# Install Fuff
-RUN go install github.com/ffuf/ffuf@latest
-
-# Install cloud-enum
-RUN git clone https://github.com/initstring/cloud_enum.git
-RUN cd cloud_enum && pip3 install -r requirements.txt
-
-# Install subfinder 
-RUN go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
-
-# Install RustScan
-RUN mkdir rustscan && cd rustscan && \
-    wget https://github.com/RustScan/RustScan/releases/download/2.0.1/rustscan_2.0.1_amd64.deb && \
-    dpkg -i rustscan_2.0.1_amd64.deb 
-
-# Install httpx
-RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
-
-# Install GF (https://github.com/tomnomnom/gf) and GF-patterns (https://github.com/1ndianl33t/Gf-Patterns)
-RUN go install -v github.com/tomnomnom/gf@latest
-RUN git clone https://github.com/1ndianl33t/Gf-Patterns && \
-    mkdir ~/.gf && \
-    mv ~/tools/Gf-Patterns/*.json ~/.gf
-
-RUN apt install -y ruby-full && \
-    gem install wpscan
-
-# Install Hydra
-RUN git clone https://github.com/vanhauser-thc/thc-hydra.git && \
-    cd thc-hydra && \
-    ./configure && \
-    make && \
-    make install
-
-# Install DirDar
-RUN go install -v github.com/m4dm0e/dirdar@latest
-
-# Install Web Cache Vulnerability Scanner
-RUN go install -v github.com/Hackmanit/Web-Cache-Vulnerability-Scanner@latest
-
-# Install headi
-RUN go install -v github.com/mlcsec/headi@latest
-
-COPY .bash_aliases ../
+WORKDIR /root
+CMD ["/bin/bash"]
