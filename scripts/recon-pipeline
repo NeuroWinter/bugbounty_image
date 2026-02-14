@@ -6,32 +6,32 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-DOMAIN=$1
-OUT=~/recon/$DOMAIN
-mkdir -p $OUT
+DOMAIN="$1"
+OUT=~/recon/"$DOMAIN"
+mkdir -p "$OUT"
 
 echo " Subdomain enumeration..."
-subfinder -d $DOMAIN -silent | anew $OUT/subs.txt
-amass enum -passive -d $DOMAIN 2>/dev/null | grep -E "^[a-zA-Z0-9.-]+\.$DOMAIN$" | anew $OUT/subs.txt
+subfinder -d "$DOMAIN" -silent | anew "$OUT/subs.txt"
+amass enum -passive -d "$DOMAIN" 2>/dev/null | grep -E "^[a-zA-Z0-9.-]+\.$DOMAIN$" | anew "$OUT/subs.txt"
 
 echo " Probing live hosts..."
-cat $OUT/subs.txt | sort -u | httpx -silent | anew $OUT/live.txt
+cat "$OUT/subs.txt" | sort -u | httpx -silent | anew "$OUT/live.txt"
 
 echo " Crawling..."
-cat $OUT/live.txt | katana -d 3 -silent | anew $OUT/urls.txt
+cat "$OUT/live.txt" | katana -d 3 -silent | anew "$OUT/urls.txt"
 
 echo " Fetching historical URLs..."
-cat $OUT/live.txt | waybackurls 2>/dev/null | anew $OUT/urls.txt
-cat $OUT/live.txt | gau --blacklist png,jpg,gif,css,woff 2>/dev/null | anew $OUT/urls.txt
+cat "$OUT/live.txt" | waybackurls 2>/dev/null | anew "$OUT/urls.txt"
+cat "$OUT/live.txt" | gau --blacklist png,jpg,gif,css,woff 2>/dev/null | anew "$OUT/urls.txt"
 
 echo " Extracting JS files..."
-cat $OUT/urls.txt | grep -iE '\.js(\?|$)' | anew $OUT/js.txt
+cat "$OUT/urls.txt" | grep -iE '\.js(\?|$)' | anew "$OUT/js.txt"
 
 echo " Extracting parameters..."
-cat $OUT/urls.txt | grep "=" | unfurl keys 2>/dev/null | sort -u | anew $OUT/params.txt
+cat "$OUT/urls.txt" | grep "=" | unfurl keys 2>/dev/null | sort -u | anew "$OUT/params.txt"
 
 echo " Running Nuclei..."
-nuclei -l $OUT/live.txt -severity critical,high,medium -o $OUT/nuclei.txt 2>/dev/null
+nuclei -l "$OUT/live.txt" -severity critical,high,medium -o "$OUT/nuclei.txt" 2>/dev/null
 
 echo " Done! Results in $OUT/"
 echo " Summary:"

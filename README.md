@@ -1,6 +1,8 @@
 # Bug Bounty Toolkit 2025
 
-A Docker image containing all essential tools for modern bug bounty hunting. Built for efficiency with pre-configured pipelines and aliases.
+A Docker image containing essential tools for bug bounty hunting. Built with pre-configured pipelines and aliases.
+
+Multi-stage build reduces image size. See [SIZE_OPTIMIZATION.md](SIZE_OPTIMIZATION.md) for details.
 
 ## Quick Start
 
@@ -11,12 +13,22 @@ docker build -t bugbounty:2025 .
 # Run interactively
 docker run -it --rm -v $(pwd)/targets:/root/targets -v $(pwd)/recon:/root/recon bugbounty:2025
 
-# Run with network capabilities (for VPN, masscan, etc.)
+# Run with network capabilities (for masscan, nmap)
 docker run -it --rm --cap-add=NET_ADMIN --cap-add=NET_RAW \
     -v $(pwd)/targets:/root/targets \
     -v $(pwd)/recon:/root/recon \
     bugbounty:2025
 ```
+
+## Available Versions
+
+- `Dockerfile` - Optimized build, ~2-3 GB
+- `Dockerfile.minimal` - Minimal build, ~800 MB, essential tools only
+- `Dockerfile.original` - Full build, ~5-7 GB, all tools and full SecLists
+
+## Standard Workflow
+
+See [WORKFLOW.md](WORKFLOW.md) for a complete recon workflow using the minimal docker image.
 
 ## Directory Structure
 
@@ -31,14 +43,20 @@ docker run -it --rm --cap-add=NET_ADMIN --cap-add=NET_RAW \
 
 ## Wordlists
 
-SecLists installed at `/usr/share/seclists/`
+Essential wordlists at `/usr/share/wordlists/`:
+- `directory-list-2.3-medium.txt`
+- `raft-small-words.txt`
+- `raft-small-directories.txt`
+- `raft-small-files.txt`
+- `subdomains-top1million-5000.txt`
+- `10k-most-common.txt`
 
-Common paths:
-- `/usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt`
-- `/usr/share/seclists/Discovery/Web-Content/raft-small-words.txt`
-- `/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt`
-- `/usr/share/seclists/Fuzzing/LFI/LFI-Jhaddix.txt`
-- `/usr/share/seclists/Passwords/Common-Credentials/10k-most-common.txt`
+Full SecLists not included in optimized build. Mount if needed:
+```bash
+docker run -v /path/to/SecLists:/usr/share/seclists bugbounty:2025
+```
+
+Original version includes full SecLists at `/usr/share/seclists/`
 
 ---
 
@@ -683,6 +701,10 @@ docker run --cap-add=NET_ADMIN --cap-add=NET_RAW ...
 ```bash
 nuclei -c 10 -rate-limit 50
 ```
+
+**Image too large:** Use `Dockerfile.minimal` for smaller image
+
+**Missing wordlists:** Mount full SecLists with `-v /path/to/SecLists:/usr/share/seclists`
 
 ---
 

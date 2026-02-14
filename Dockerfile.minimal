@@ -1,0 +1,122 @@
+FROM docker.io/ubuntu:22.04 AS builder
+LABEL Description="Bug Bounty Toolkit 2025 - Minimal"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    GOPATH=/root/go \
+    GO111MODULE=on
+
+ENV PATH=/root/go/bin:/usr/local/go/bin:$PATH
+
+# Minimal build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git wget curl ca-certificates \
+    make gcc libpcap-dev \
+    python3 python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# INSTALL GO 1.22
+RUN wget -q https://go.dev/dl/go1.22.1.linux-amd64.tar.gz -O /tmp/go.tar.gz && \
+    tar -C /usr/local -xzf /tmp/go.tar.gz && \
+    rm /tmp/go.tar.gz
+
+# ESSENTIAL GO TOOLS ONLY
+RUN go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest && \
+    go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest && \
+    go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest && \
+    go install -v github.com/projectdiscovery/katana/cmd/katana@latest && \
+    go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest && \
+    go install -v github.com/ffuf/ffuf/v2@latest && \
+    go install -v github.com/tomnomnom/waybackurls@latest && \
+    go install -v github.com/lc/gau/v2/cmd/gau@latest && \
+    go install -v github.com/hahwul/dalfox/v2@latest && \
+    go install -v github.com/tomnomnom/gf@latest && \
+    go install -v github.com/tomnomnom/anew@latest && \
+    go install -v github.com/tomnomnom/qsreplace@latest && \
+    go install -v github.com/tomnomnom/unfurl@latest && \
+    go clean -cache -modcache
+
+# ESSENTIAL PYTHON TOOLS
+RUN pip3 install --no-cache-dir \
+    uro jsbeautifier && \
+    git clone --depth 1 https://github.com/sqlmapproject/sqlmap.git /opt/sqlmap && \
+    find /opt -name ".git" -type d -exec rm -rf {} + 2>/dev/null || true
+
+# MASSCAN (essential for port scanning)
+RUN git clone --depth 1 https://github.com/robertdavidgraham/masscan /tmp/masscan && \
+    cd /tmp/masscan && make -j$(nproc) && make install && \
+    rm -rf /tmp/masscan
+
+# Minimal wordlists (top 3 most used)
+RUN mkdir -p /usr/share/wordlists && \
+    wget -q https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/raft-small-words.txt \
+         -O /usr/share/wordlists/raft-small-words.txt && \
+    wget -q https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/subdomains-top1million-5000.txt \
+         -O /usr/share/wordlists/subdomains-top1million-5000.txt
+
+# ============================================
+# FINAL STAGE - Minimal Runtime
+# ============================================
+FROM docker.io/ubuntu:22.04
+LABEL Description="Bug Bounty Toolkit 2025 - Minimal"
+
+ENV GOPATH=/root/go \
+    GO111MODULE=on \
+    PATH=/root/go/bin:$PATH
+
+# Minimal runtime dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl wget ca-certificates \
+        python3 \
+        jq nmap libpcap0.8 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Copy only essential binaries
+COPY --from=builder /root/go/bin/subfinder /root/go/bin/
+COPY --from=builder /root/go/bin/httpx /root/go/bin/
+COPY --from=builder /root/go/bin/nuclei /root/go/bin/
+COPY --from=builder /root/go/bin/katana /root/go/bin/
+COPY --from=builder /root/go/bin/naabu /root/go/bin/
+COPY --from=builder /root/go/bin/ffuf /root/go/bin/
+COPY --from=builder /root/go/bin/waybackurls /root/go/bin/
+COPY --from=builder /root/go/bin/gau /root/go/bin/
+COPY --from=builder /root/go/bin/dalfox /root/go/bin/
+COPY --from=builder /root/go/bin/gf /root/go/bin/
+COPY --from=builder /root/go/bin/anew /root/go/bin/
+COPY --from=builder /root/go/bin/qsreplace /root/go/bin/
+COPY --from=builder /root/go/bin/unfurl /root/go/bin/
+
+# Copy essential tools
+COPY --from=builder /usr/local/bin/masscan /usr/local/bin/
+COPY --from=builder /opt/sqlmap /opt/sqlmap
+COPY --from=builder /usr/local/lib/python3.10/dist-packages /usr/local/lib/python3.10/dist-packages
+COPY --from=builder /usr/local/bin/js-beautify /usr/local/bin/
+
+# Copy minimal wordlists
+COPY --from=builder /usr/share/wordlists /usr/share/wordlists
+
+# Symlink for compatibility
+RUN ln -s /usr/share/wordlists /usr/share/seclists && \
+    ln -s /opt/sqlmap/sqlmap.py /usr/local/bin/sqlmap && \
+    chmod +x /opt/sqlmap/sqlmap.py
+
+# GF PATTERNS
+RUN git clone --depth 1 https://github.com/1ndianl33t/Gf-Patterns /tmp/gf && \
+    mkdir -p ~/.gf && mv /tmp/gf/*.json ~/.gf/ && rm -rf /tmp/gf
+
+# NUCLEI TEMPLATES
+RUN nuclei -update-templates
+
+# GAU CONFIG
+RUN echo 'providers = ["wayback", "commoncrawl", "otx", "urlscan"]' > /root/.gau.toml
+
+# Minimal aliases
+RUN echo 'alias ll="ls -la"' >> /root/.bashrc && \
+    echo 'alias subs="subfinder -silent"' >> /root/.bashrc && \
+    echo 'alias probe="httpx -silent"' >> /root/.bashrc && \
+    echo 'alias nuc="nuclei"' >> /root/.bashrc
+
+RUN mkdir -p ~/targets ~/recon ~/reports
+
+WORKDIR /root
+CMD ["/bin/bash"]
