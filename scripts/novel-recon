@@ -1,0 +1,113 @@
+#!/bin/bash
+set -euo pipefail
+
+# Novel reconnaissance beyond standard tools
+# Usage: novel-recon <domain>
+
+[ $# -eq 0 ] && echo "Usage: novel-recon <domain>" && exit 1
+
+DOMAIN="$1"
+RECON_DIR="$HOME/recon/$DOMAIN"
+NOVEL_DIR="$RECON_DIR/novel"
+
+mkdir -p "$NOVEL_DIR"
+cd "$NOVEL_DIR"
+
+echo "[*] Starting novel reconnaissance for $DOMAIN"
+
+# Extract hidden APIs from source maps
+echo "[1/8] Extracting source maps..."
+if [ -f "$RECON_DIR/js.txt" ]; then
+    while read -r js; do
+        curl -sk "$js" 2>/dev/null | grep -o "sourceMappingURL=.*" | cut -d'=' -f2 >> source-maps.txt || true
+    done < "$RECON_DIR/js.txt"
+
+    # Download and analyze source maps
+    if [ -f source-maps.txt ]; then
+        while read -r map; do
+            curl -sk "$map" 2>/dev/null | jq -r '.sources[]?' 2>/dev/null | grep -iE "admin|internal|api|dev" >> source-map-findings.txt || true
+        done < source-maps.txt
+        [ -s source-map-findings.txt ] && echo "  Found: $(wc -l < source-map-findings.txt) interesting source paths"
+    fi
+fi
+
+# Extract ALL API endpoints from JS
+echo "[2/8] Mining hidden endpoints from JavaScript..."
+if [ -f "$RECON_DIR/js.txt" ]; then
+    while read -r js; do
+        curl -sk "$js" 2>/dev/null | grep -oE "(https?://[^\"']+|/api/[^\"']+|/v[0-9]/[^\"']+)" | sort -u >> hidden-endpoints.txt || true
+    done < "$RECON_DIR/js.txt"
+    [ -s hidden-endpoints.txt ] && sort -u hidden-endpoints.txt -o hidden-endpoints.txt
+    [ -s hidden-endpoints.txt ] && echo "  Found: $(wc -l < hidden-endpoints.txt) hidden endpoints"
+fi
+
+# Certificate transparency deep dive
+echo "[3/8] Certificate transparency mining..."
+curl -s "https://crt.sh/?q=%25.$DOMAIN&output=json" 2>/dev/null | jq -r '.[].name_value' 2>/dev/null | sed 's/\*\.//g' | sort -u | anew crt-subdomains.txt
+if [ -f crt-subdomains.txt ]; then
+    # Find dead/internal subdomains
+    while read -r sub; do
+        if ! host "$sub" >/dev/null 2>&1; then
+            echo "$sub" >> dead-subdomains.txt
+        fi
+    done < crt-subdomains.txt
+    [ -s dead-subdomains.txt ] && echo "  Found: $(wc -l < dead-subdomains.txt) dead/internal subdomains (potential takeover)"
+fi
+
+# Find environment permutations
+echo "[4/8] Discovering beta/staging/dev environments..."
+for prefix in beta staging dev test qa uat preprod internal; do
+    for suffix in "" "01" "02" "-east" "-west" "-api" "-app"; do
+        echo "$prefix$suffix.$DOMAIN"
+    done
+done | httpx-go -silent -mc 200,401,403 -o environments.txt 2>/dev/null
+[ -s environments.txt ] && echo "  Found: $(wc -l < environments.txt) non-production environments"
+
+# GitHub code search patterns
+echo "[5/8] GitHub reconnaissance..."
+cat > github-search-queries.txt << EOF
+"$DOMAIN" api_key
+"$DOMAIN" secret
+"$DOMAIN" token
+"$DOMAIN" password
+"$DOMAIN" internal
+"$DOMAIN" staging
+EOF
+echo "  Saved GitHub search queries to github-search-queries.txt (manual review needed)"
+
+# Find OAuth/SSO endpoints
+echo "[6/8] Discovering authentication flows..."
+if [ -f "$RECON_DIR/urls.txt" ]; then
+    grep -iE "oauth|sso|saml|openid|auth|login|signin" "$RECON_DIR/urls.txt" > auth-endpoints.txt || true
+    [ -s auth-endpoints.txt ] && echo "  Found: $(wc -l < auth-endpoints.txt) authentication endpoints"
+fi
+
+# Find financial/business logic endpoints
+echo "[7/8] Identifying business logic targets..."
+if [ -f "$RECON_DIR/urls.txt" ]; then
+    grep -iE "pay|purchase|checkout|cart|order|amount|price|balance|transaction|withdraw|transfer|reward|cashback|refund|coupon|promo|discount" \
+        "$RECON_DIR/urls.txt" > business-logic-endpoints.txt || true
+    [ -s business-logic-endpoints.txt ] && echo "  Found: $(wc -l < business-logic-endpoints.txt) business logic endpoints"
+fi
+
+# Extract third-party services
+echo "[8/8] Mapping third-party integrations..."
+if [ -f "$RECON_DIR/js.txt" ]; then
+    while read -r js; do
+        curl -sk "$js" 2>/dev/null | grep -oE "https?://[a-z0-9.-]+" | sort -u >> all-domains.txt || true
+    done < "$RECON_DIR/js.txt"
+    grep -v "$DOMAIN" all-domains.txt 2>/dev/null | sort -u > third-party-services.txt || true
+    [ -s third-party-services.txt ] && echo "  Found: $(wc -l < third-party-services.txt) third-party services"
+fi
+
+# Summary
+echo ""
+echo "Novel reconnaissance complete!"
+echo "Results saved to: $NOVEL_DIR"
+echo ""
+echo "High-priority targets:"
+[ -s dead-subdomains.txt ] && echo "  - dead-subdomains.txt (potential takeovers)"
+[ -s environments.txt ] && echo "  - environments.txt (staging/dev environments)"
+[ -s hidden-endpoints.txt ] && echo "  - hidden-endpoints.txt (hidden APIs)"
+[ -s business-logic-endpoints.txt ] && echo "  - business-logic-endpoints.txt (financial endpoints)"
+[ -s auth-endpoints.txt ] && echo "  - auth-endpoints.txt (auth flows)"

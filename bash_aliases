@@ -1,160 +1,217 @@
-# GENERAL
+#!/bin/bash
+
+# Aliases
 alias ll='ls -la'
-hgrip(){ history | grep $1; }
-
-# AWS
-s3ls(){ aws s3 ls s3://$1; }
-s3cp(){ aws s3 cp $2 s3://$1; }
-
-# CERTIFICATE & SUBDOMAIN DISCOVERY
-certspotter(){
-    curl -s https://certspotter.com/api/v0/certs\?domain\=$1 | jq '.[].dns_names[]' | sed 's/\"//g' | sed 's/\*\.//g' | sort -u | grep $1 | tee -a $1-certspotter.txt
-}
-
-crtsh(){
-    curl -s https://crt.sh/\?q\=%.$1\&output\=json | jq -r '.[].name_value' | sed 's/\*\.//g' | sort -u | tee -a $1-domains-crt.txt
-}
-
-crtshmulti(){
-    input=$1
-    while IFS= read -r line; do
-        curl -s https://crt.sh/\?q\=%25.$line\&output\=json | jq -r '.[].name_value' | sed 's/\*\.//g' | sort -u | tee -a all.txt
-    done < "$input"
-}
-
-certnmap(){
-    curl https://certspotter.com/api/v0/certs\?domain\=$1 | jq '.[].dns_names[]' | sed 's/\"//g' | sed 's/\*\.//g' | sort -u | grep $1 | nmap -T5 -Pn -sS -i $1
-}
-
-# RECON SHORTCUTS
 alias subs='subfinder -silent'
 alias probe='httpx -silent'
 alias live='httpx -silent -mc 200,301,302,403'
-alias crawl='katana -silent'
-alias urls='waybackurls'
-alias params='paramspider'
-alias getparams='unfurl keys'
+alias nuc='nuclei'
+alias ff='ffuf'
 
-ipinfo(){ curl http://ipinfo.io/$1; }
-
-am(){
-    amass enum --ip --active -r 1.1.1.1 -d $1 -json $1.json
-    jq .name $1.json | sed "s/\"//g" | httpx -silent | tee -a $1-domains-am.txt
+# Certificate search
+crtsh(){
+    [ -z "$1" ] && echo "Usage: crtsh <domain>" && return 1
+    local resp
+    resp=$(curl -s --max-time 30 -H 'User-Agent: Mozilla/5.0' \
+        "https://crt.sh/?q=%25.$1&output=json")
+    if ! echo "$resp" | jq -e . >/dev/null 2>&1; then
+        echo "  crt.sh returned non-JSON (rate-limited or down), skipping" >&2
+        return 1
+    fi
+    echo "$resp" \
+        | jq -r '.[].name_value' \
+        | sed 's/\*\.//g' \
+        | tr '[:upper:]' '[:lower:]' \
+        | grep -E "\.$1$" \
+        | sort -u
 }
 
-# TOOL SHORTCUTS
-alias nuc='nuclei'
-alias dal='dalfox'
-alias ff='ffuf'
-alias fb='feroxbuster'
+# Port scanning
+ms(){
+    [ -z "$1" ] && echo "Usage: ms <ip_or_cidr>" && return 1
+    masscan -p80,443,8080,8443,3000,8000 "$1" --rate=1000
+}
 
+
+# Amass with httpx probe
+am(){
+    [ -z "$1" ] && echo "Usage: am <domain>" && return 1
+    # Parse names from stdout (schema-independent) rather than amass v4 JSON,
+    # which has changed shape across releases.
+    amass enum -passive -d "$1" 2>/dev/null \
+        | grep -E "^[a-zA-Z0-9._-]+\.$1$" \
+        | sort -u \
+        | httpx-go -silent \
+        | anew "$1-domains-am.txt"
+}
+
+# Arjun parameter discovery (accepts a single URL or a file of URLs)
+aj(){
+    [ -z "$1" ] && echo "Usage: aj <url|urls.txt>" && return 1
+    if [ -f "$1" ]; then
+        while read -r line; do
+            [ -z "$line" ] && continue
+            arjun -u "$line"
+        done < "$1"
+    elif printf '%s' "$1" | grep -qE '^https?://'; then
+        arjun -u "$1"
+    else
+        echo "Not a file or URL: $1" && return 1
+    fi
+}
+
+# Photon crawler
 ph(){
-    python3 ~/tools/Photon/photon.py -u $1 -l 6 --keys --wayback
+    [ -z "$1" ] && echo "Usage: ph <url>" && return 1
+    python3 ~/tools/Photon/photon.py -u "$1" -l 6 --keys --wayback
 }
 
 massph(){
-    cat $1 | while read line; do ph $line; done
-}
-
-aj(){
-    cat $1 | while read line; do arjun -u https://$line/; done
-}
-
-dirsearchx(){
-    python3 ~/tools/dirsearch/dirsearch.py -r -R 4 -t 10 -F \
-        -e "php,asp,aspx,php3,php4,php5,txt,shtm,shtml,phtm,phtml,jhtml,pl,jsp,cfm,cfml,py,rb,cfg,zip,pdf,gz,tar,tar.gz,tgz,doc,docx,xls,xlsx,conf,log" \
-        -w /usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt \
-        -u $1 -b -x 301,302,404,500 --recursion-status 200-399,401 \
-        -o ~/reports/$(echo $1 | sed 's/[^a-zA-Z0-9]/_/g')_dir.json --format json
-}
-
-certbrute(){
-    cat $1 | while read line; do dirsearchx $line; done
-}
-
-wpsa(){
-    wpscan --random-user-agent -e ap,at,tt,cb,dbe,u,m --url $1 \
-        -o ~/reports/wps_$(echo $1 | sed -e 's#^https://##' -e 's#^http://##' -e 's#/$##' -e 's/[^a-zA-Z0-9]/_/g').txt
-}
-
-# JS ANALYSIS
-alias js-urls='grep -iE "\.js$"'
-
-jss(){
-    curl -s $1 | js-beautify - | grep -iE "key|api|password|admin|ConsumerKey|ConsumerSecret|DB_USERNAME|HEROKU_API_KEY|HOMEBREW_GITHUB_API_TOKEN|JEKYLL_GITHUB_TOKEN|PT_TOKEN|SESSION_TOKEN|SF_USERNAME|SLACK_BOT_TOKEN|access-token|access_token|access_token_secret|accesstoken|api-key|api_key|api_secret_key|api_token|auth_token|authkey|authorization|authorization_key|authorization_token|authtoken|aws_access_key_id|aws_secret_access_key|bearer|bot_access_token|bucket|client-secret|client_id|client_key|client_secret|clientsecret|consumer_key|consumer_secret|dbpasswd|email|encryption-key|encryption_key|encryptionkey|id_dsa|irc_pass|oauth_token|pass|private_key|privatekey|secret|secret-key|secret_key|secret_token|secretkey|session_key|session_secret|slack_api_token|slack_secret_token|slack_token|ssh-key|ssh_key|sshkey|token|username|xoxa-2|xoxr|private-key|private_token|Authorization|Bearer"
-}
-
-mjss(){
-    cat $1 | while read url; do
-        echo "[*] $url"
-        jss $url
+    [ -z "$1" ] && echo "Usage: massph <urls.txt>" && return 1
+    [ ! -f "$1" ] && echo "File not found: $1" && return 1
+    cat "$1" | while read -r line; do
+        [ -z "$line" ] && continue
+        ph "$line"
     done
 }
 
-# SCANNING
-alias scan-xss='gf xss | uro | dalfox pipe'
-alias scan-sqli='gf sqli | uro | ghauri --batch'
-
-ms(){
-    masscan -p66,80,81,443,445,457,1080,1100,1241,1352,1433,1434,1521,1944,2301,3128,3306,4000,4001,4002,4100,5000,5432,5800,5801,5802,6346,6347,7001,7002,8080,8888,30821 $1
+# JS secret scan
+jss(){
+    [ -z "$1" ] && echo "Usage: jss <js_url>" && return 1
+    curl -s "$1" | js-beautify - | grep -iE "api|key|token|secret|password"
 }
 
-massnmap(){
-    input=$1
-    while IFS= read -r line; do
-        domain=$(echo $line | sed -e "s/^http:\/\///" -e "s/^https:\/\///")
-        nmap -A -sV $domain
-    done < $input
-}
+# Quick recon (fast, no amass/nuclei)
+quickrecon(){
+    [ -z "$1" ] && echo "Usage: quickrecon <domain>" && return 1
 
-wfuzzx(){
-    wfuzz -w /usr/share/seclists/Discovery/Web-Content/raft-small-directories.txt \
-          -w /usr/share/seclists/Discovery/Web-Content/raft-small-files.txt \
-          -u https://$1/FUZZ/FUZ2Z --hc 301,302,404,500
-}
+    domain="$1"
+    mkdir -p ~/recon/"$domain" && cd ~/recon/"$domain" || return 1
 
-# MISC
-ncx(){ nc -l -n -vv -p $1 -k; }
+    echo "[1/5] Subdomain enumeration (fast)..."
+    subfinder -d "$domain" -silent | anew subs.txt
+    crtsh "$domain" | anew subs.txt
 
-# Full recon one-liner
-fullrecon(){
-    domain=$1
-    echo " Starting full recon on $domain"
-    mkdir -p ~/recon/$domain && cd ~/recon/$domain
+    echo "[2/5] Probing..."
+    cat subs.txt | /usr/local/bin/httpx -silent | anew live.txt
 
-    # Subdomains
-    echo " Subdomain enumeration..."
-    subfinder -d $domain -silent | anew subs.txt
-    # Amass - only output subdomains, not the verbose relationship data
-    amass enum -passive -d $domain 2>/dev/null | grep -E "^[a-zA-Z0-9.-]+\.$domain$" | anew subs.txt
-    crtsh $domain 2>/dev/null | grep -v "^$" | anew subs.txt
+    echo "[3/5] URL discovery..."
+    local errout=/dev/null
+    [ -n "${DEBUG:-}" ] && errout=/dev/stderr
+    # waybackurls/gau need bare hostnames, not schemed URLs.
+    cat live.txt | unfurl domains | sort -u | anew hosts.txt > /dev/null
+    cat hosts.txt | waybackurls 2>"$errout" | anew urls.txt
+    cat hosts.txt | gau --threads 10 2>"$errout" | anew urls.txt
 
-    # Probe
-    echo " Probing..."
-    cat subs.txt | sort -u | httpx -silent | anew live.txt
-
-    # URLs
-    echo " URL discovery..."
-    cat live.txt | katana -d 3 -silent | anew urls.txt
-    cat live.txt | waybackurls 2>/dev/null | anew urls.txt
-    cat live.txt | gau --blacklist png,jpg,gif,css,woff 2>/dev/null | anew urls.txt
-
-    # JS
-    echo " JS extraction..."
+    echo "[4/5] JS files..."
     cat urls.txt | grep -iE '\.js(\?|$)' | anew js.txt
 
-    # Params
-    echo " Parameter discovery..."
+    echo "[5/5] Parameters..."
     cat urls.txt | grep "=" | unfurl keys 2>/dev/null | sort -u | anew params.txt
 
-    # Nuclei
-    echo " Nuclei scan..."
-    nuclei -l live.txt -severity critical,high,medium -o nuclei.txt 2>/dev/null
+    echo ""
+    echo "Quick recon complete!"
+    echo "  Subdomains: $(wc -l < subs.txt 2>/dev/null || echo 0)"
+    echo "  Live: $(wc -l < live.txt 2>/dev/null || echo 0)"
+    echo "  URLs: $(wc -l < urls.txt 2>/dev/null || echo 0)"
+    echo ""
+    echo "For full scan with amass+nuclei, run: fullrecon $domain"
+}
 
-    echo " Done! Results in ~/recon/$domain/"
-    echo " Summary:"
-    echo "    Subdomains: $(wc -l < subs.txt 2>/dev/null || echo 0)"
-    echo "    Live hosts: $(wc -l < live.txt 2>/dev/null || echo 0)"
-    echo "    URLs found: $(wc -l < urls.txt 2>/dev/null || echo 0)"
-    echo "    JS files:   $(wc -l < js.txt 2>/dev/null || echo 0)"
+# Full recon pipeline
+fullrecon(){
+    [ -z "$1" ] && echo "Usage: fullrecon <domain>" && return 1
+
+    domain="$1"
+    mkdir -p ~/recon/"$domain" && cd ~/recon/"$domain" || return 1
+
+    echo "[1/6] Subdomain enumeration..."
+    subfinder -d "$domain" -silent | anew subs.txt
+
+    # Amass with timeout (can hang indefinitely)
+    # NOTE: amass v4 prints its association graph to stdout, not clean names.
+    # Filter to FQDNs that actually belong to the target before storing.
+    timeout 300 amass enum -passive -d "$domain" 2>/dev/null \
+        | grep -E "^[a-zA-Z0-9._-]+\.${domain}$" \
+        | anew subs.txt || echo "  (amass timeout/skipped)"
+
+    # Alternative: crt.sh
+    crtsh "$domain" | anew subs.txt
+
+    echo "[2/6] Probing..."
+    cat subs.txt | /usr/local/bin/httpx -silent | anew live.txt
+
+    echo "[3/6] URL discovery..."
+    # Set DEBUG=1 to see tool errors instead of swallowing them.
+    local errout=/dev/null
+    [ -n "${DEBUG:-}" ] && errout=/dev/stderr
+
+    # katana takes full URLs (with scheme) on stdin.
+    cat live.txt | katana -d 3 -silent 2>"$errout" | anew urls.txt || echo "  (katana failed, skipping)"
+
+    # waybackurls/gau take bare hostnames, NOT schemed URLs. Strip the scheme first.
+    cat live.txt | unfurl domains | sort -u | anew hosts.txt > /dev/null
+    cat hosts.txt | waybackurls 2>"$errout" | anew urls.txt
+    cat hosts.txt | gau --threads 5 2>"$errout" | anew urls.txt
+
+    echo "[4/6] JS files..."
+    cat urls.txt | grep -iE '\.js(\?|$)' | anew js.txt
+
+    echo "[5/6] Parameters..."
+    cat urls.txt | grep "=" | unfurl keys 2>/dev/null | sort -u | anew params.txt
+
+    echo "[6/6] Nuclei scan (rate-limited, may take time)..."
+    nuclei -l live.txt -severity critical,high,medium -rl 150 -c 25 -o nuclei.txt -silent 2>/dev/null &
+    NUCLEI_PID=$!
+
+    echo ""
+    echo "Results (nuclei running in background PID: $NUCLEI_PID):"
+    echo "  Subdomains: $(wc -l < subs.txt 2>/dev/null || echo 0)"
+    echo "  Live: $(wc -l < live.txt 2>/dev/null || echo 0)"
+    echo "  URLs: $(wc -l < urls.txt 2>/dev/null || echo 0)"
+    echo ""
+    echo "Nuclei is running in background. Check progress:"
+    echo "  tail -f nuclei.txt"
+    echo "  kill $NUCLEI_PID  # to stop early"
+}
+
+# Help
+bbhelp(){
+    echo "Bug Bounty Toolkit Commands"
+    echo ""
+    echo "Main:"
+    echo "  quickrecon <domain> - Fast recon (no amass/nuclei, 2-5 min)"
+    echo "  fullrecon <domain>  - Full recon pipeline (slower, complete)"
+    echo "  bbhelp              - This help"
+    echo ""
+    echo "Discovery:"
+    echo "  crtsh <domain>      - Certificate transparency"
+    echo "  am <domain>         - Amass + httpx probe"
+    echo "  subs, probe, live   - Aliases for subfinder/httpx"
+    echo ""
+    echo "Scanning:"
+    echo "  nuc, ff             - Aliases for nuclei/ffuf"
+    echo "  ms <ip>             - Masscan ports"
+    echo "  aj <url|urls.txt>   - Arjun parameter discovery"
+    echo ""
+    echo "Crawling:"
+    echo "  ph <url>            - Photon crawler"
+    echo "  massph <urls.txt>   - Bulk Photon"
+    echo ""
+    echo "Analysis:"
+    echo "  jss <js_url>        - JS secrets"
+    echo ""
+    echo "Standard Scripts:"
+    echo "  recon-pipeline, xss-hunt, scope-check,"
+    echo "  report-gen, monitor, version"
+    echo ""
+    echo "Novel Attack Scripts:"
+    echo "  novel-recon <domain>            - Advanced recon (source maps, hidden APIs)"
+    echo "  race-condition-test <url>       - Race condition testing"
+    echo "  cache-poison-test <url>         - Cache poisoning tests"
+    echo "  integer-overflow-fuzz <urls>    - Integer overflow fuzzing"
+    echo "  graphql-introspect <url>        - GraphQL security testing"
+    echo "  business-logic-fuzz <url> <p>   - Business logic edge cases"
+    echo "  prototype-pollution-test <url>  - Prototype pollution"
+    echo "  ssrf-test <url> <param>         - SSRF with cloud metadata"
 }

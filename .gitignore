@@ -1,0 +1,45 @@
+# Build artifacts
+*.old
+*.backup
+*.bak
+*.tmp
+*~
+
+# Temporary files
+tmp/
+temp/
+.temp/
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Logs
+*.log
+logs/
+
+# Docker
+.dockerignore
+
+# Git
+.git/
+
+# Local config
+.env
+*.local
+
+# Test outputs
+test-results/
+coverage/
+
+# Recon outputs (if mounted locally)
+recon/*/
+reports/*/
+targets/*/

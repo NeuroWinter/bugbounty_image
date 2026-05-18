@@ -1,0 +1,8 @@
+#!/bin/bash
+echo "Bug Bounty Toolkit $(cat /root/VERSION 2>/dev/null)"
+echo ""
+echo "Go: $(go version 2>/dev/null | awk '{print $3}')"
+echo "httpx: $(httpx-go -version 2>&1 | head -1)"
+echo "nuclei: $(nuclei -version 2>&1 | head -1)"
+echo "ffuf: $(ffuf -V 2>&1 | head -1)"
+[ -d "/usr/share/seclists" ] && echo "SecLists: installed"

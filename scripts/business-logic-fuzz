@@ -1,0 +1,124 @@
+#!/bin/bash
+set -euo pipefail
+
+# Business logic fuzzing with edge cases
+# Usage: business-logic-fuzz <url> <param_name>
+
+[ $# -lt 2 ] && cat << 'EOF' && exit 1
+Usage: business-logic-fuzz <url> <param_name>
+
+Tests parameter with business logic edge cases:
+  - Negative values
+  - Zero
+  - Decimal precision issues
+  - Scientific notation
+  - String/type confusion
+  - Special values (NaN, Infinity)
+
+Example: business-logic-fuzz "https://api.example.com/checkout?amount=10" amount
+EOF
+
+URL="$1"
+PARAM="$2"
+OUTPUT="business-logic-fuzz-$(date +%s).txt"
+
+# Extract base URL and original value
+BASE_URL=$(echo "$URL" | sed 's/?.*//')
+ORIG_VALUE=$(echo "$URL" | grep -oP "$PARAM=\K[^&]*" || echo "")
+
+echo "[*] Business logic fuzzing" | tee "$OUTPUT"
+echo "    URL: $BASE_URL" | tee -a "$OUTPUT"
+echo "    Parameter: $PARAM" | tee -a "$OUTPUT"
+echo "    Original value: $ORIG_VALUE" | tee -a "$OUTPUT"
+echo "" | tee -a "$OUTPUT"
+
+# Test payloads
+declare -a PAYLOADS=(
+    # Negative values
+    "-1" "-100" "-999999"
+    # Zero
+    "0" "0.0" "00"
+    # Decimal precision
+    "0.01" "0.001" "0.0000001"
+    "0.99" "0.999999999"
+    "1.0000000001"
+    # Large numbers
+    "999999999" "9999999999999"
+    # Scientific notation
+    "1e10" "1e-10" "1e100"
+    # Negative scientific
+    "-1e10"
+    # String injection
+    "null" "NULL" "undefined"
+    "true" "false"
+    # Special values
+    "NaN" "Infinity" "-Infinity"
+    # Array/Object syntax
+    "[]" "{}" "[1,2,3]"
+    # Type confusion
+    "\"1\"" "'1'" "1.0" "1e0"
+)
+
+INTERESTING=0
+
+for payload in "${PAYLOADS[@]}"; do
+    # URL encode payload
+    ENCODED=$(echo "$payload" | jq -sRr @uri)
+
+    # Build test URL
+    TEST_URL=$(echo "$URL" | sed "s/$PARAM=[^&]*/$PARAM=$ENCODED/")
+
+    # Make request
+    RESPONSE=$(curl -sk "$TEST_URL" -w "\n%{http_code}\n%{size_download}" 2>/dev/null)
+    STATUS=$(echo "$RESPONSE" | tail -2 | head -1)
+    SIZE=$(echo "$RESPONSE" | tail -1)
+    BODY=$(echo "$RESPONSE" | head -n -2)
+
+    # Check for interesting responses
+    IS_INTERESTING=0
+
+    # Different status code
+    if [[ "$STATUS" != "200" && "$STATUS" != "400" ]]; then
+        IS_INTERESTING=1
+        REASON="Status: $STATUS"
+    fi
+
+    # Error messages
+    if echo "$BODY" | grep -iqE "error|exception|fail|invalid|overflow|underflow|out of range|sql|syntax"; then
+        IS_INTERESTING=1
+        REASON="Error in response"
+    fi
+
+    # Success with negative/zero (possible logic flaw)
+    if [[ "$payload" =~ ^-.*$ || "$payload" == "0" ]] && echo "$BODY" | grep -iqE "success|true|ok|accepted|completed"; then
+        IS_INTERESTING=1
+        REASON="Success with unusual value"
+    fi
+
+    # Unusually large/small response
+    if [[ "$SIZE" -gt 100000 || "$SIZE" -lt 10 ]]; then
+        IS_INTERESTING=1
+        REASON="Unusual response size: $SIZE bytes"
+    fi
+
+    if [ $IS_INTERESTING -eq 1 ]; then
+        INTERESTING=$((INTERESTING + 1))
+        {
+            echo "[!] Interesting response"
+            echo "    Payload: $payload"
+            echo "    Reason: $REASON"
+            echo "    URL: $TEST_URL"
+            echo "    Status: $STATUS"
+            echo "    Size: $SIZE bytes"
+            echo "    Body preview:"
+            echo "$BODY" | head -10 | sed 's/^/      /'
+            echo ""
+        } | tee -a "$OUTPUT"
+    fi
+done
+
+echo "" | tee -a "$OUTPUT"
+echo "Fuzzing complete!" | tee -a "$OUTPUT"
+echo "  Payloads tested: ${#PAYLOADS[@]}" | tee -a "$OUTPUT"
+echo "  Interesting responses: $INTERESTING" | tee -a "$OUTPUT"
+[ $INTERESTING -gt 0 ] && echo "  Results: $OUTPUT" | tee -a "$OUTPUT"

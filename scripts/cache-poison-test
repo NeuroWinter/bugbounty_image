@@ -1,0 +1,69 @@
+#!/bin/bash
+set -euo pipefail
+
+# Test for cache poisoning vulnerabilities
+# Usage: cache-poison-test <url>
+
+[ $# -eq 0 ] && cat << 'EOF' && exit 1
+Usage: cache-poison-test <url>
+
+Tests for:
+  - Web cache deception
+  - Cache key manipulation
+  - Host header poisoning
+  - Unkeyed header injection
+
+Example: cache-poison-test https://example.com
+EOF
+
+URL="$1"
+OUTPUT="cache-poison-results-$(date +%s).txt"
+
+echo "[*] Cache poisoning tests for: $URL" | tee "$OUTPUT"
+echo "" | tee -a "$OUTPUT"
+
+# Test 1: Web Cache Deception
+echo "[1/6] Testing web cache deception..." | tee -a "$OUTPUT"
+curl -sk "$URL/api/user/profile/../static/cache.css" -I | tee -a "$OUTPUT"
+echo "" | tee -a "$OUTPUT"
+
+# Test 2: X-Forwarded-Host injection
+echo "[2/6] Testing X-Forwarded-Host poisoning..." | tee -a "$OUTPUT"
+curl -sk "$URL" -H "X-Forwarded-Host: evil.com" -I | grep -E "Location:|X-Cache:" | tee -a "$OUTPUT"
+echo "" | tee -a "$OUTPUT"
+
+# Test 3: X-Forwarded-Scheme
+echo "[3/6] Testing X-Forwarded-Scheme manipulation..." | tee -a "$OUTPUT"
+curl -sk "$URL" -H "X-Forwarded-Scheme: nothttps" -I | grep -E "Location:|X-Cache:" | tee -a "$OUTPUT"
+echo "" | tee -a "$OUTPUT"
+
+# Test 4: X-Original-URL / X-Rewrite-URL
+echo "[4/6] Testing X-Original-URL header..." | tee -a "$OUTPUT"
+curl -sk "$URL" -H "X-Original-URL: /admin" -I | grep -E "HTTP/|X-Cache:" | tee -a "$OUTPUT"
+echo "" | tee -a "$OUTPUT"
+
+# Test 5: Host header injection
+echo "[5/6] Testing Host header poisoning..." | tee -a "$OUTPUT"
+curl -sk "$URL" -H "Host: evil.com" -I | grep -E "Location:|X-Cache:" | tee -a "$OUTPUT"
+echo "" | tee -a "$OUTPUT"
+
+# Test 6: Vary header analysis
+echo "[6/6] Analyzing cache headers..." | tee -a "$OUTPUT"
+HEADERS=$(curl -sk "$URL" -I)
+echo "$HEADERS" | grep -iE "cache-control|vary|x-cache|cf-cache|age:" | tee -a "$OUTPUT"
+echo "" | tee -a "$OUTPUT"
+
+# Check if cache is present
+if echo "$HEADERS" | grep -iq "x-cache.*hit\|cf-cache-status.*hit\|age:"; then
+    echo "✓ Cache detected - further testing recommended" | tee -a "$OUTPUT"
+    echo "" | tee -a "$OUTPUT"
+    echo "Next steps:" | tee -a "$OUTPUT"
+    echo "  1. Identify unkeyed headers (not in Vary header)" | tee -a "$OUTPUT"
+    echo "  2. Test poisoning with Burp Param Miner extension" | tee -a "$OUTPUT"
+    echo "  3. Try Fat GET requests (body in GET request)" | tee -a "$OUTPUT"
+else
+    echo "ℹ No cache detected in responses" | tee -a "$OUTPUT"
+fi
+
+echo "" | tee -a "$OUTPUT"
+echo "Results saved to: $OUTPUT"

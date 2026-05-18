@@ -1,0 +1,97 @@
+#!/bin/bash
+set -euo pipefail
+
+# Test for race conditions on endpoints
+# Usage: race-condition-test <url> <method> <data> [threads]
+
+[ $# -lt 2 ] && cat << 'EOF' && exit 1
+Usage: race-condition-test <url> <method> [data] [threads]
+
+Examples:
+  race-condition-test https://api.example.com/claim POST '{"offer_id":123}' 50
+  race-condition-test https://api.example.com/redeem POST @request.json 100
+  race-condition-test https://api.example.com/balance GET "" 20
+
+Tip: Add auth headers in ~/.bugbounty-headers
+EOF
+
+URL="$1"
+METHOD="${2:-GET}"
+DATA="${3:-}"
+THREADS="${4:-50}"
+HEADERS_FILE="$HOME/.bugbounty-headers"
+
+echo "[*] Race condition test"
+echo "    URL: $URL"
+echo "    Method: $METHOD"
+echo "    Threads: $THREADS"
+echo ""
+
+# Build curl command
+BUILD_CMD="curl -sk -X $METHOD \"$URL\""
+
+# Add headers if file exists
+if [ -f "$HEADERS_FILE" ]; then
+    while read -r header; do
+        [[ -z "$header" || "$header" =~ ^# ]] && continue
+        BUILD_CMD="$BUILD_CMD -H \"$header\""
+    done < "$HEADERS_FILE"
+fi
+
+# Add data if provided
+if [ -n "$DATA" ]; then
+    if [[ "$DATA" == @* ]]; then
+        # Data from file
+        BUILD_CMD="$BUILD_CMD -d @${DATA:1}"
+    else
+        # Inline data
+        BUILD_CMD="$BUILD_CMD -d '$DATA'"
+    fi
+fi
+
+# Create output directory
+OUTPUT_DIR="race-results-$(date +%s)"
+mkdir -p "$OUTPUT_DIR"
+
+echo "[*] Firing $THREADS simultaneous requests..."
+START=$(date +%s.%N)
+
+# Fire all requests simultaneously
+for i in $(seq 1 "$THREADS"); do
+    eval "$BUILD_CMD" > "$OUTPUT_DIR/response-$i.txt" 2>&1 &
+done
+
+# Wait for all to complete
+wait
+
+END=$(date +%s.%N)
+DURATION=$(echo "$END - $START" | bc)
+
+echo "[*] Completed in ${DURATION}s"
+echo ""
+echo "Analysis:"
+
+# Count unique responses
+echo "  Unique responses: $(find "$OUTPUT_DIR" -name 'response-*.txt' -exec md5sum {} \; | cut -d' ' -f1 | sort -u | wc -l)"
+
+# Check for success indicators
+SUCCESS_COUNT=$(grep -l "success\|200\|OK" "$OUTPUT_DIR"/response-*.txt 2>/dev/null | wc -l)
+echo "  Successful responses: $SUCCESS_COUNT"
+
+# Look for errors
+ERROR_COUNT=$(grep -l "error\|fail\|invalid" "$OUTPUT_DIR"/response-*.txt 2>/dev/null | wc -l)
+echo "  Error responses: $ERROR_COUNT"
+
+# Check for different status codes
+echo ""
+echo "Status code distribution:"
+grep -h "HTTP/" "$OUTPUT_DIR"/response-*.txt 2>/dev/null | sort | uniq -c | sort -rn || echo "  (Could not extract status codes)"
+
+echo ""
+echo "Results saved to: $OUTPUT_DIR"
+echo ""
+
+if [ "$SUCCESS_COUNT" -gt 1 ]; then
+    echo "⚠️  Multiple successful responses detected - potential race condition!"
+    echo "   Review the response files to confirm if action was duplicated"
+fi

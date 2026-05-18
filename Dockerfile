@@ -1,201 +1,174 @@
-FROM docker.io/ubuntu:22.04
-LABEL Description="Bug Bounty Toolkit 2025"
+# syntax=docker/dockerfile:1.4
+# Bug Bounty Toolkit 2025 - WORKING VERSION
+# Version: 2.1
+
+# ============================================================================
+# STAGE 1: Go Tools Builder
+# ============================================================================
+FROM golang:1.24.1-alpine AS go-builder
+
+ENV GOOS=linux \
+    GOARCH=amd64 \
+    GOTOOLCHAIN=auto
+
+RUN apk add --no-cache git
+
+# Build all Go tools statically (no CGO)
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=0 go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest && \
+    CGO_ENABLED=0 go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest && \
+    CGO_ENABLED=0 go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest && \
+    CGO_ENABLED=0 go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest && \
+    CGO_ENABLED=0 go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest && \
+    CGO_ENABLED=0 go install -v github.com/projectdiscovery/uncover/cmd/uncover@latest && \
+    CGO_ENABLED=0 go install -v github.com/projectdiscovery/katana/cmd/katana@latest && \
+    CGO_ENABLED=0 go install -v github.com/owasp-amass/amass/v4/...@latest && \
+    CGO_ENABLED=0 go install -v github.com/tomnomnom/waybackurls@latest && \
+    CGO_ENABLED=0 go install -v github.com/lc/gau/v2/cmd/gau@latest && \
+    CGO_ENABLED=0 go install -v github.com/ffuf/ffuf/v2@latest && \
+    CGO_ENABLED=0 go install -v github.com/hahwul/dalfox/v2@latest && \
+    CGO_ENABLED=0 go install -v github.com/tomnomnom/gf@latest && \
+    CGO_ENABLED=0 go install -v github.com/tomnomnom/anew@latest && \
+    CGO_ENABLED=0 go install -v github.com/tomnomnom/qsreplace@latest && \
+    CGO_ENABLED=0 go install -v github.com/tomnomnom/unfurl@latest && \
+    CGO_ENABLED=0 go install -v github.com/lc/subjs@latest
+
+# ============================================================================
+# STAGE 2: Final Runtime Image
+# ============================================================================
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    GOPATH=/root/go \
-    GO111MODULE=on
+    PATH=/usr/local/bin:/root/.local/bin:$PATH \
+    TERM=xterm-256color
 
-ENV PATH=/root/go/bin:/usr/local/go/bin:/root/.cargo/bin:/root/.local/bin:$PATH
-
+# ============================================================================
+# Install System Dependencies
+# ============================================================================
 RUN apt-get update && apt-get upgrade -y && \
     apt-get install -y --no-install-recommends \
-        # Core utilities
-        git python3 python3-pip python3-venv wget curl ca-certificates gnupg \
-        # Build tools
-        make gcc g++ libffi-dev \
-        # Libraries
-        libgnutls28-dev libcurl4-gnutls-dev libssl-dev libpcap-dev \
-        # Network tools
-        jq vim dnsutils iputils-ping nmap iproute2 netcat-openbsd \
-        # VPN/Network
-        wireguard wireguard-tools openresolv iptables nftables \
-        # Ruby for wpscan
-        ruby-full \
-        # Chromium for headless tools
+        git curl wget ca-certificates jq \
+        python3 python3-pip \
+        gcc g++ make \
+        libssl-dev libpcap-dev \
+        dnsutils nmap netcat-openbsd \
         chromium-browser \
-    && \
-    # Install Node.js 20
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+        sqlite3 && \
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
-    # Cleanup
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
-# INSTALL GO 1.22
-RUN wget -q https://go.dev/dl/go1.22.1.linux-amd64.tar.gz -O /tmp/go.tar.gz && \
-    tar -C /usr/local -xzf /tmp/go.tar.gz && \
-    rm /tmp/go.tar.gz
+# ============================================================================
+# Copy Go Tools FIRST (before any Python installs)
+# ============================================================================
+COPY --from=go-builder /go/bin/* /usr/local/bin/
 
-# INSTALL RUST
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+# Rename httpx to prevent Python conflict
+RUN mv /usr/local/bin/httpx /usr/local/bin/httpx-go
 
-# GO TOOLS ProjectDiscovery Suite
-RUN echo "[+] Installing ProjectDiscovery tools..." && \
-    go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest && \
-    go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest && \
-    go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest && \
-    go install -v github.com/projectdiscovery/katana/cmd/katana@latest && \
-    go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest && \
-    go install -v github.com/projectdiscovery/cvemap/cmd/cvemap@latest && \
-    go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest && \
-    go install -v github.com/projectdiscovery/uncover/cmd/uncover@latest
-
-# GO TOOLS - Subdomain & Asset Discovery
-RUN echo "[+] Installing subdomain tools..." && \
-    go install -v github.com/owasp-amass/amass/v4/...@master && \
-    go install -v github.com/tomnomnom/assetfinder@latest
-
-# GO TOOLS URL & Endpoint Discovery
-RUN echo "[+] Installing URL discovery tools..." && \
-    go install -v github.com/tomnomnom/waybackurls@latest && \
-    go install -v github.com/lc/gau/v2/cmd/gau@latest && \
-    go install -v github.com/jaeles-project/gospider@latest && \
-    go install -v github.com/hakluke/hakrawler@latest
-
-# GO TOOLS- Fuzzing
-RUN echo "[+] Installing fuzzing tools..." && \
-    go install -v github.com/ffuf/ffuf/v2@latest && \
-    go install -v github.com/OJ/gobuster/v3@latest && \
-    go install -v github.com/tomnomnom/httprobe@latest
-
-# GO TOOLS Vulnerability Scanning
-RUN echo "[+] Installing vuln scanners..." && \
-    go install -v github.com/hahwul/dalfox/v2@latest && \
-    go install -v github.com/tomnomnom/gf@latest && \
-    go install -v github.com/m4dm0e/dirdar@latest && \
-    go install -v github.com/Hackmanit/Web-Cache-Vulnerability-Scanner@latest && \
-    go install -v github.com/mlcsec/headi@latest
-
-# GO TOOLS tomnomnom kit
-RUN echo "[+] Installing utility tools..." && \
-    go install -v github.com/tomnomnom/anew@latest && \
-    go install -v github.com/tomnomnom/qsreplace@latest && \
-    go install -v github.com/tomnomnom/unfurl@latest && \
-    go install -v github.com/tomnomnom/hacks/html-tool@latest
-
-# GO TOOLS -JS Analysis
-RUN echo "[+] Installing JS analysis tools..." && \
-    go install -v github.com/lc/subjs@latest
-
-# Clean Go cache after all Go installs
-RUN go clean -cache -modcache
-
-# RUST TOOLS
-RUN echo "[+] Installing Rust tools..." && \
-    cargo install feroxbuster && \
-    rm -rf /root/.cargo/registry /root/.cargo/git
-
-# PYTHON TOOLS
-RUN echo "[+] Installing Python tools..." && \
-    pip3 install --no-cache-dir \
-        wfuzz \
+# ============================================================================
+# Install Python Tools
+# ============================================================================
+RUN pip3 install --no-cache-dir --break-system-packages \
         uro \
         pyyaml \
         requests \
-        beautifulsoup4
+        beautifulsoup4 \
+        waymore
 
-WORKDIR /root/tools/
+# ============================================================================
+# Install Git-based Python Tools
+# ============================================================================
+WORKDIR /root/tools
 
-# PYTHON TOOLS from repos
-RUN echo "[+] Cloning Python tools..." && \
-    # SQLMap
-    git clone --depth 1 https://github.com/sqlmapproject/sqlmap.git && \
-    # Ghauri - SQLi tool
-    git clone --depth 1 https://github.com/r0oth3x49/ghauri.git && \
-    cd ghauri && pip3 install --no-cache-dir . && cd .. && \
-    # jwt_tool
-    git clone --depth 1 https://github.com/ticarpi/jwt_tool.git && \
-    cd jwt_tool && pip3 install --no-cache-dir -r requirements.txt && \
+RUN git clone --depth 1 --branch 1.8 https://github.com/sqlmapproject/sqlmap.git sqlmap && \
+    git clone --depth 1 https://github.com/ticarpi/jwt_tool.git jwt_tool && \
+    cd jwt_tool && pip3 install --no-cache-dir --break-system-packages -r requirements.txt && \
     chmod +x jwt_tool.py && ln -s /root/tools/jwt_tool/jwt_tool.py /usr/local/bin/jwt_tool && cd .. && \
-    # Arjun - Parameter discovery
-    git clone --depth 1 https://github.com/s0md3v/Arjun.git && \
-    cd Arjun && pip3 install --no-cache-dir . && cd .. && \
-    # ParamSpider
-    git clone --depth 1 https://github.com/devanshbatham/ParamSpider.git && \
-    cd ParamSpider && pip3 install --no-cache-dir . && cd .. && \
-    # LinkFinder - JS endpoint discovery
-    git clone --depth 1 https://github.com/GerbenJavado/LinkFinder.git && \
-    cd LinkFinder && pip3 install --no-cache-dir -r requirements.txt && \
-    python3 setup.py install && cd .. && \
-    # SecretFinder - Secrets in JS
-    git clone --depth 1 https://github.com/m4ll0k/SecretFinder.git && \
-    cd SecretFinder && pip3 install --no-cache-dir -r requirements.txt && cd .. && \
-    # Photon - Crawler
-    git clone --depth 1 https://github.com/s0md3v/Photon.git && \
-    pip3 install --no-cache-dir -r Photon/requirements.txt && \
-    # dirsearch
-    git clone --depth 1 https://github.com/maurosoria/dirsearch.git && \
-    pip3 install --no-cache-dir -r dirsearch/requirements.txt && \
-    # cloud_enum
-    git clone --depth 1 https://github.com/initstring/cloud_enum.git && \
-    pip3 install --no-cache-dir -r cloud_enum/requirements.txt && \
-    # waymore - Enhanced wayback tool
-    pip3 install --no-cache-dir waymore && \
-    # Clean up .git dirs
+    git clone --depth 1 https://github.com/s0md3v/Arjun.git Arjun && \
+    cd Arjun && pip3 install --no-cache-dir --break-system-packages . && cd .. && \
+    git clone --depth 1 https://github.com/m4ll0k/SecretFinder.git SecretFinder && \
+    cd SecretFinder && pip3 install --no-cache-dir --break-system-packages -r requirements.txt && cd .. && \
+    git clone --depth 1 https://github.com/maurosoria/dirsearch.git dirsearch && \
+    pip3 install --no-cache-dir --break-system-packages -r dirsearch/requirements.txt && \
+    git clone --depth 1 https://github.com/s0md3v/Photon.git Photon && \
+    pip3 install --no-cache-dir --break-system-packages -r Photon/requirements.txt && \
+    chmod +x dirsearch/dirsearch.py SecretFinder/SecretFinder.py && \
+    ln -s /root/tools/dirsearch/dirsearch.py /usr/local/bin/dirsearch && \
+    ln -s /root/tools/SecretFinder/SecretFinder.py /usr/local/bin/secretfinder && \
     find . -name ".git" -type d -exec rm -rf {} + 2>/dev/null || true
 
-# COMPILED TOOLS
-RUN echo "[+] Building compiled tools..." && \
-    # MassScan
-    git clone --depth 1 https://github.com/robertdavidgraham/masscan && \
-    cd masscan && make -j$(nproc) && make install && cd .. && rm -rf masscan && \
-    # Hydra
-    git clone --depth 1 https://github.com/vanhauser-thc/thc-hydra.git && \
-    cd thc-hydra && ./configure && make -j$(nproc) && make install && cd .. && rm -rf thc-hydra
+# ============================================================================
+# Build C Tools
+# ============================================================================
+RUN git clone --depth 1 https://github.com/robertdavidgraham/masscan.git /tmp/masscan && \
+    cd /tmp/masscan && make -j$(nproc) && make install && rm -rf /tmp/masscan
 
-# NPM TOOLS
-RUN echo "[+] Installing npm tools..." && \
-    npm -g install js-beautify && \
-    npm cache clean --force
+# ============================================================================
+# Install Node Tools
+# ============================================================================
+RUN npm install -g js-beautify && npm cache clean --force
 
-# RUBY TOOLS
-RUN echo "[+] Installing Ruby tools..." && \
-    gem install wpscan --no-document
+# ============================================================================
+# Setup Tool Configurations
+# ============================================================================
+RUN git clone --depth 1 https://github.com/1ndianl33t/Gf-Patterns /tmp/gf-patterns && \
+    mkdir -p ~/.gf && mv /tmp/gf-patterns/*.json ~/.gf/ && rm -rf /tmp/gf-patterns
 
-# GF PATTERNS
-RUN echo "[+] Setting up GF patterns..." && \
-    git clone --depth 1 https://github.com/1ndianl33t/Gf-Patterns && \
-    mkdir -p ~/.gf && \
-    mv Gf-Patterns/*.json ~/.gf/ && \
-    rm -rf Gf-Patterns
+RUN nuclei -update-templates -silent
 
-# NUCLEI TEMPLATES
-RUN echo "[+] Updating Nuclei templates..." && \
-    nuclei -update-templates
+RUN echo 'providers = ["wayback", "commoncrawl", "otx", "urlscan"]' > /root/.gau.toml
 
-# GAU CONFIG
-RUN mkdir -p /root && echo 'providers = ["wayback", "commoncrawl", "otx", "urlscan"]' > /root/.gau.toml
+# ============================================================================
+# Download SecLists
+# ============================================================================
+RUN wget -q https://github.com/danielmiessler/SecLists/archive/refs/tags/2026.1.tar.gz -O /tmp/seclists.tar.gz && \
+    tar -xzf /tmp/seclists.tar.gz -C /tmp && \
+    mv /tmp/SecLists-2026.1 /usr/share/seclists && \
+    rm /tmp/seclists.tar.gz
 
-# VERIFY GO TOOLS ARE FIRST IN PATH
-RUN echo "[+] Verifying tool paths..." && \
-    which httpx && \
-    httpx -version
+# ============================================================================
+# Create Directory Structure
+# ============================================================================
+RUN mkdir -p ~/targets ~/recon ~/reports ~/scope ~/configs
 
-# WORDLISTS
-RUN echo "[+] Downloading wordlists..." && \
-    wget -q https://github.com/danielmiessler/SecLists/archive/refs/tags/2024.1.tar.gz && \
-    tar -xf 2024.1.tar.gz && rm 2024.1.tar.gz && \
-    mv SecLists-2024.1 /usr/share/seclists
-
-# DIRECTORY STRUCTURE
-RUN mkdir -p ~/targets ~/recon ~/reports
-
-# COPY SCRIPTS AND ALIASES
-COPY scripts/recon-pipeline /usr/local/bin/recon-pipeline
-COPY scripts/xss-hunt /usr/local/bin/xss-hunt
-RUN chmod +x /usr/local/bin/recon-pipeline /usr/local/bin/xss-hunt
+# ============================================================================
+# Copy Scripts and Config
+# ============================================================================
+COPY scripts/* /usr/local/bin/
+RUN chmod +x /usr/local/bin/*
 
 COPY bash_aliases /root/.bash_aliases
-RUN echo "source ~/.bash_aliases" >> ~/.bashrc
+COPY VERSION /root/VERSION
 
+# ============================================================================
+# Fix bash_aliases to use httpx-go
+# ============================================================================
+RUN sed -i 's|/usr/local/bin/httpx|httpx-go|g' /root/.bash_aliases && \
+    sed -i 's|httpx -silent|httpx-go -silent|g' /root/.bash_aliases && \
+    sed -i "s|alias probe='httpx -silent'|alias probe='httpx-go -silent'|g" /root/.bash_aliases && \
+    sed -i "s|alias live='httpx -silent|alias live='httpx-go -silent|g" /root/.bash_aliases
+
+# ============================================================================
+# Setup Bash Environment
+# ============================================================================
+RUN echo 'source ~/.bash_aliases' >> ~/.bashrc && \
+    echo '' >> ~/.bashrc && \
+    echo 'cat << "EOF"' >> ~/.bashrc && \
+    echo '  ╔═══════════════════════════════════════════╗' >> ~/.bashrc && \
+    echo '  ║   Bug Bounty Toolkit v2.1                ║' >> ~/.bashrc && \
+    echo '  ║   Type: bbhelp for commands              ║' >> ~/.bashrc && \
+    echo '  ╚═══════════════════════════════════════════╝' >> ~/.bashrc && \
+    echo 'EOF' >> ~/.bashrc
+
+RUN echo "$(date +%Y-%m-%d)" > /root/BUILD_DATE
+
+# ============================================================================
+# Runtime Configuration
+# ============================================================================
 WORKDIR /root
+VOLUME ["/root/targets", "/root/recon", "/root/reports"]
+
 CMD ["/bin/bash"]

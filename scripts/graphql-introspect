@@ -1,0 +1,136 @@
+#!/bin/bash
+set -euo pipefail
+
+# GraphQL introspection and attack surface mapping
+# Usage: graphql-introspect <graphql-url>
+
+[ $# -eq 0 ] && cat << 'EOF' && exit 1
+Usage: graphql-introspect <graphql-url>
+
+Tests:
+  - Introspection query
+  - Field suggestion (typo errors)
+  - Batch query attacks
+  - Circular query fragments
+  - Alias-based DoS
+
+Example: graphql-introspect https://api.example.com/graphql
+EOF
+
+URL="$1"
+OUTPUT_DIR="graphql-$(basename "$URL")-$(date +%s)"
+
+mkdir -p "$OUTPUT_DIR"
+
+echo "[*] GraphQL security testing: $URL"
+echo ""
+
+# Test 1: Introspection
+echo "[1/6] Testing introspection query..."
+INTROSPECTION_QUERY='{"query":"{\n  __schema {\n    queryType { name }\n    mutationType { name }\n    types {\n      name\n      fields {\n        name\n        type { name }\n      }\n    }\n  }\n}"}'
+
+INTROSPECTION=$(curl -sk "$URL" \
+    -H "Content-Type: application/json" \
+    -d "$INTROSPECTION_QUERY" 2>/dev/null)
+
+if echo "$INTROSPECTION" | jq -e '.data.__schema' > /dev/null 2>&1; then
+    echo "✓ Introspection enabled!"
+    echo "$INTROSPECTION" | jq '.' > "$OUTPUT_DIR/introspection.json"
+    echo "  Saved to: $OUTPUT_DIR/introspection.json"
+
+    # Extract interesting fields
+    echo "$INTROSPECTION" | jq -r '.data.__schema.types[].fields[]?.name' 2>/dev/null | \
+        grep -iE "admin|secret|internal|password|token|key|private" > "$OUTPUT_DIR/interesting-fields.txt" || true
+
+    if [ -s "$OUTPUT_DIR/interesting-fields.txt" ]; then
+        echo "  Found interesting fields:"
+        head -10 "$OUTPUT_DIR/interesting-fields.txt" | sed 's/^/    /'
+    fi
+else
+    echo "✗ Introspection disabled or blocked"
+fi
+echo ""
+
+# Test 2: Field suggestion (typo to leak field names)
+echo "[2/6] Testing field suggestion via typos..."
+SUGGEST='{"query":"{ user { idd email } }"}'
+SUGGEST_RESP=$(curl -sk "$URL" -H "Content-Type: application/json" -d "$SUGGEST" 2>/dev/null)
+
+if echo "$SUGGEST_RESP" | grep -q "Did you mean"; then
+    echo "✓ Field suggestions enabled"
+    echo "$SUGGEST_RESP" | jq -r '.errors[].message' | grep "Did you mean" | tee "$OUTPUT_DIR/suggestions.txt"
+else
+    echo "✗ No field suggestions"
+fi
+echo ""
+
+# Test 3: Batch query attack
+echo "[3/6] Testing batch query (alias DoS)..."
+BATCH_QUERY='{"query":"query { '
+for i in {1..100}; do
+    BATCH_QUERY+="alias$i: __typename "
+done
+BATCH_QUERY+='}"}'
+
+START=$(date +%s%N)
+BATCH_RESP=$(curl -sk "$URL" -H "Content-Type: application/json" -d "$BATCH_QUERY" -w "\n%{http_code}" 2>/dev/null)
+END=$(date +%s%N)
+DURATION=$(((END - START) / 1000000))
+STATUS=$(echo "$BATCH_RESP" | tail -1)
+
+echo "  Status: $STATUS"
+echo "  Response time: ${DURATION}ms"
+if [ "$DURATION" -gt 5000 ]; then
+    echo "⚠️  Slow response - potential DoS vector"
+fi
+echo ""
+
+# Test 4: Query depth attack
+echo "[4/6] Testing query depth limits..."
+DEEP_QUERY='{"query":"{ user { posts { comments { author { posts { comments { id } } } } } } }"}'
+DEEP_RESP=$(curl -sk "$URL" -H "Content-Type: application/json" -d "$DEEP_QUERY" 2>/dev/null)
+
+if echo "$DEEP_RESP" | grep -iq "depth\|complexity\|too deep"; then
+    echo "✓ Depth limits enforced"
+else
+    echo "⚠️  No depth limit detected - test deeper nesting"
+fi
+echo ""
+
+# Test 5: Circular fragments
+echo "[5/6] Testing circular fragment references..."
+CIRCULAR='{"query":"fragment A on User { ...B } fragment B on User { ...A } query { user { ...A } }"}'
+CIRCULAR_RESP=$(curl -sk "$URL" -H "Content-Type: application/json" -d "$CIRCULAR" 2>/dev/null)
+
+if echo "$CIRCULAR_RESP" | grep -iq "circular\|recursive"; then
+    echo "✓ Circular fragments blocked"
+else
+    echo "⚠️  Circular fragments not blocked"
+fi
+echo ""
+
+# Test 6: Array-based batching
+echo "[6/6] Testing array-based batch queries..."
+ARRAY_BATCH='[
+  {"query":"{ __typename }"},
+  {"query":"{ __typename }"},
+  {"query":"{ __typename }"}
+]'
+ARRAY_RESP=$(curl -sk "$URL" -H "Content-Type: application/json" -d "$ARRAY_BATCH" 2>/dev/null)
+
+if echo "$ARRAY_RESP" | jq -e 'length' > /dev/null 2>&1; then
+    BATCH_COUNT=$(echo "$ARRAY_RESP" | jq 'length')
+    echo "✓ Array batching enabled ($BATCH_COUNT responses)"
+    echo "⚠️  Can be used for rate limit bypass and IDOR enumeration"
+else
+    echo "✗ Array batching not supported"
+fi
+echo ""
+
+echo "Testing complete!"
+echo "Results saved to: $OUTPUT_DIR"
+echo ""
+echo "Recommended manual tests:"
+echo "  - IDOR via batch queries: [{'query':'{ user(id:1){email}}'}, {'query':'{ user(id:2){email}}'}]"
+echo "  - Mutation testing (if mutations found in introspection)"
+echo "  - SQL injection in string arguments"

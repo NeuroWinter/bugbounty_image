@@ -1,0 +1,112 @@
+#!/bin/bash
+set -euo pipefail
+
+# Fuzz numeric parameters with integer overflow values
+# Usage: integer-overflow-fuzz <urls.txt>
+
+[ $# -eq 0 ] && cat << 'EOF' && exit 1
+Usage: integer-overflow-fuzz <urls.txt>
+
+Fuzzes all numeric parameters with:
+  - Max int32: 2147483647
+  - Max int64: 9223372036854775807
+  - Negative max: -9223372036854775808
+  - Zero, negative, scientific notation
+
+Example: integer-overflow-fuzz urls-with-params.txt
+EOF
+
+INPUT="$1"
+OUTPUT_DIR="integer-fuzz-$(date +%s)"
+
+[ ! -f "$INPUT" ] && echo "File not found: $INPUT" && exit 1
+
+mkdir -p "$OUTPUT_DIR"
+
+# Integer overflow payloads
+declare -a PAYLOADS=(
+    "2147483647"           # Max int32
+    "2147483648"           # Max int32 + 1
+    "4294967295"           # Max uint32
+    "4294967296"           # Max uint32 + 1
+    "9223372036854775807"  # Max int64
+    "9223372036854775808"  # Max int64 + 1
+    "-2147483648"          # Min int32
+    "-2147483649"          # Min int32 - 1
+    "-9223372036854775808" # Min int64
+    "-9223372036854775809" # Min int64 - 1
+    "0"
+    "-1"
+    "1e10"                 # Scientific notation
+    "1e100"
+    "99999999999999999999" # Arbitrary large
+    "0.999999999999999"    # Float precision
+    "1.0000000000001"      # Float precision
+)
+
+echo "[*] Integer overflow fuzzing"
+echo "    Input: $INPUT"
+echo "    Payloads: ${#PAYLOADS[@]}"
+echo ""
+
+TOTAL=0
+INTERESTING=0
+
+while read -r url; do
+    [[ -z "$url" || ! "$url" =~ = ]] && continue
+
+    TOTAL=$((TOTAL + 1))
+
+    # Extract base URL and params
+    BASE=$(echo "$url" | cut -d'?' -f1)
+    PARAMS=$(echo "$url" | cut -d'?' -f2)
+
+    # For each parameter
+    IFS='&' read -ra PARAM_ARRAY <<< "$PARAMS"
+    for param in "${PARAM_ARRAY[@]}"; do
+        PARAM_NAME=$(echo "$param" | cut -d'=' -f1)
+
+        # Test each payload
+        for payload in "${PAYLOADS[@]}"; do
+            # Replace parameter value
+            NEW_PARAMS=$(echo "$PARAMS" | sed "s/$PARAM_NAME=[^&]*/$PARAM_NAME=$payload/")
+            TEST_URL="$BASE?$NEW_PARAMS"
+
+            # Make request
+            RESPONSE=$(curl -sk "$TEST_URL" -w "\n%{http_code}" 2>/dev/null)
+            STATUS=$(echo "$RESPONSE" | tail -1)
+            BODY=$(echo "$RESPONSE" | head -n -1)
+
+            # Check for interesting responses
+            if [[ "$STATUS" == "500" ]] || echo "$BODY" | grep -iqE "error|exception|overflow|out of range|invalid|sql"; then
+                INTERESTING=$((INTERESTING + 1))
+                echo "[!] Interesting response for $PARAM_NAME=$payload"
+                echo "    URL: $TEST_URL"
+                echo "    Status: $STATUS"
+                echo "$BODY" | head -5
+                echo ""
+
+                # Save to file
+                {
+                    echo "URL: $TEST_URL"
+                    echo "Parameter: $PARAM_NAME"
+                    echo "Payload: $payload"
+                    echo "Status: $STATUS"
+                    echo "Response:"
+                    echo "$BODY"
+                    echo "---"
+                } >> "$OUTPUT_DIR/findings.txt"
+            fi
+        done
+    done
+
+    # Progress
+    [ $((TOTAL % 10)) -eq 0 ] && echo "[*] Tested $TOTAL URLs..."
+
+done < "$INPUT"
+
+echo ""
+echo "Fuzzing complete!"
+echo "  URLs tested: $TOTAL"
+echo "  Interesting responses: $INTERESTING"
+[ $INTERESTING -gt 0 ] && echo "  Results: $OUTPUT_DIR/findings.txt"

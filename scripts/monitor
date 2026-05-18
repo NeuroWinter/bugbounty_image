@@ -1,0 +1,29 @@
+#!/bin/bash
+set -euo pipefail
+
+[ $# -eq 0 ] && echo "Usage: monitor <domain> [interval_seconds]" && exit 1
+
+DOMAIN="$1"
+INTERVAL="${2:-3600}"
+RECON_DIR="$HOME/recon/$DOMAIN"
+OLD="$RECON_DIR/.old"
+
+mkdir -p "$OLD"
+
+echo "Monitoring $DOMAIN every $INTERVAL seconds. Ctrl+C to stop."
+
+while true; do
+    echo "[$(date)] Running recon..."
+    recon-pipeline "$DOMAIN"
+
+    # Check for new subdomains
+    if [ -f "$OLD/subs.txt" ]; then
+        NEW=$(comm -13 <(sort "$OLD/subs.txt") <(sort "$RECON_DIR/subs.txt") | wc -l)
+        [ $NEW -gt 0 ] && echo "New subdomains: $NEW"
+    fi
+
+    # Save current state
+    cp "$RECON_DIR/subs.txt" "$OLD/subs.txt" 2>/dev/null || true
+
+    sleep "$INTERVAL"
+done
